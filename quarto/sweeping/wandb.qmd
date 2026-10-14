@@ -1,0 +1,34 @@
+---
+title: "Weights & Biases"
+---
+
+[Weights & Biases](https://wandb.ai) is a platform for manage sweeps and tracking experiments. At a basic level it can be used to track the progress of your training runs and to serve as a record of experiments you've done. For regular training runs this can be enabled by setting these options in a training config:
+
+
+```yaml
+logger:
+  use_wandb: true
+  project: your_existing_weights_and_biases_project
+  tags: [] #any tags you'd like to apply to the run for organisation
+```
+
+:::{.callout-tip}
+You'll need to make a free Weights and Biases account if you don't have one.
+:::
+
+Here's an example of the sort of information you can get at a glance:
+
+
+
+![Screenshot of a Weights & Biases dashboard for a Metis training run](images/example_wandb.png)
+
+
+Once launched, Weights & Biases collects all the runs in a sweep together, allows you to sort the runs by key metrics (e.g. final validation loss) and computes things like hyperparameter correlation with validation loss:
+
+
+![Screenshot of a Weights & Biases parameter correlation for a sweep](images/parameter_correlation.png)
+
+For more advanced use cases its also possible to download the raw results for local analysis.
+
+<!-- TODO: getting set up with W&B; how METIS logs runs; reading sweep results.
+-->

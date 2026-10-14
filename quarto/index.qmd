@@ -1,0 +1,40 @@
+---
+title: "METIS"
+subtitle: "Configurable neural network surrogates for stochastic timeseries simulators"
+toc: false
+---
+
+METIS is a collection of configurable "recipes" for training neural network
+surrogate (emulator) models that stand in for expensive stochastic simulators.
+Instead of running a slow simulator every time you need a sample, you train a
+model once and then generate realisations cheaply.
+
+The codebase favours simple, single-file implementations wired together with
+[Hydra](https://hydra.cc) configuration, so that you can swap models, datasets
+and training settings by editing YAML rather than code.
+
+### Overview of METIS features
+* Implementations of MLPs, Autoregressive Transformers, Flow Matching and Normalising Flows.
+* Support for static parameter conditioning and sequence conditioning.
+* Parquet-based dataloading pipeline.
+* Weights and Biases integration for hyperparameter sweeping and experiment tracking.
+* Visualisation utilities.
+
+## How these docs are organised
+
+- **[Basics of surrogate modelling](basics/motivation.qmd)** — what surrogate
+  modelling is, the SIRDS example simulator, preparing data, a Hydra crash
+  course, and training your first model.
+- **[Different kinds of surrogates](models/overview.qmd)** — the model families
+  on offer (MLP, Transformer, Flow Matching, Normalising Flow), when to reach for each,
+  and how their configs work.
+- **[Utilities and advanced features]()** — training on multiple GPUs and visualising datasets.
+- **[Sweeping](sweeping/overview.qmd)** — tuning hyperparameters with Weights &
+  Biases and the METIS sweep configs.
+- **[SBI](sbi/overview.qmd)** — using a trained surrogate for simulation-based
+  inference.
+
+::: {.callout-tip}
+New here? Start with [Motivating surrogate modelling](basics/motivation.qmd) and
+work through the **Basics** section in order.
+:::

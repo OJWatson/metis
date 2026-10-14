@@ -1,0 +1,38 @@
+---
+title: "Motivating surrogate modelling"
+---
+
+## Why surrogate modelling?
+
+<!-- TODO: motivate the problem — expensive stochastic simulators, the need to
+run them many times (inference, sensitivity analysis, decision making). -->
+Many scientific disciplines are increasingly reliant on computational simulators which reproduce complex behaviours. However, these simulators are often slow and expensive to run, rendering tasks like scenario analysis, forecasting and parameter inference, difficult or otherwise impractical. For example, its been reported that a single forward simulation over a large COVID-19 Agent-Based Model like JUNE can take several days [@chopra2023differentiableagentbasedepidemiology]. Surrogate models serve as cost-effective approximations of these systems. Whilst surrogates have been implemented with techniques like nonparametric statistical methods and splines, modern neural network approaches offer significantly greater flexibility and are often more performant.
+
+::: {.callout-tip}
+For an overview of the surrogate modelling process and a reporting standard for surrogates, see SMRS [@NEURIPS2025_3e1d8e89].
+:::
+
+
+
+<!-- - Covid agent-based models (ABMs) as a real-world example of an expensive
+  stochastic simulator. -->
+
+## Introducing METIS
+
+METIS is a set of configurable recipes for training neural surrogates of time series simulators. METIS implements several neural network architectures and algorithms and is designed so that practictioners can easily train and sweep over different combinations purely through simple config files and comandline overrrides. Using METIS to develop surrogates for existing simulators simply requires preparing data in the correct format and supplying appropriate config files.
+
+<!-- TODO: position METIS.
+
+- METIS as a set of configurable "recipes" for building surrogates. -->
+
+
+::: {.callout-important}
+METIS is designed to be useful to those without deep learning expertise, however, it will be beneficial to have some basic familiarity with neural networks and their training. If you're unfamiliar or feeling a bit rusty these resources should be helpful:
+
+* [But what is a neural network? (YouTube)](https://youtu.be/aircAruvnKk?si=dVRKEs7pTgZWgNUm)
+* [Introduction to Machine Learning (Online Notes)](https://clairedavid.github.io/intro_to_ml/nn/nn_0_intro.html)
+* [Understanding Deep Learning (Textbook)](https://udlbook.github.io/udlbook/)
+
+
+
+:::

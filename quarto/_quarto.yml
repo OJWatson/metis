@@ -1,0 +1,69 @@
+project:
+  type: website
+  output-dir: _site
+
+website:
+  title: "METIS"
+  description: "Configurable neural network surrogate models for stochastic timeseries simulators"
+  page-navigation: true
+  navbar:
+    left:
+      - href: index.qmd
+        text: Home
+    right:
+      - icon: github
+        href: https://github.com/  # TODO: repo URL
+        aria-label: GitHub
+  sidebar:
+    style: docked
+    search: true
+    collapse-level: 1
+    contents:
+      - href: index.qmd
+        text: Home
+      - section: "Basics of surrogate modelling with Metis"
+        contents:
+          - basics/motivation.qmd
+          - basics/sirds-example.qmd
+          - basics/preparing-data.qmd
+          - basics/installing_metis.qmd
+          - basics/hydra.qmd
+          - basics/training.qmd
+          - basics/saving-and-loading.qmd
+      - section: "Different kinds of surrogates"
+        contents:
+          - models/overview.qmd
+          - models/mlp.qmd
+          - models/transformer.qmd
+          - models/flow-matching.qmd
+          - models/normalising-flow.qmd
+      - section: "Utilities and advanced features"
+        contents: 
+          - utils/distributed-training.qmd
+      - section: "Sweeping"
+        contents:
+          - sweeping/overview.qmd
+          - sweeping/wandb.qmd
+          - sweeping/sweep-config.qmd
+      - section: "SBI"
+        contents:
+          - sbi/overview.qmd
+          - sbi/vi-mcmc.qmd
+
+# Author-date citations: [@key] renders inline as "(Semenova et al. 2025)" and
+# @key as "Semenova et al. (2025)", with a reference list at the end of the page.
+# Pandoc defaults to Chicago author-date, so no `csl:` is needed.
+bibliography: references.bib
+
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    toc: true
+  ipynb: default
+
+# Cache executed cells so a full render doesn't re-run the training/data code
+# every time. Delete a page's _freeze entry (or run `quarto render --no-cache`)
+# to force re-execution.
+execute:
+  freeze: auto

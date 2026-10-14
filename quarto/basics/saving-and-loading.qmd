@@ -1,0 +1,26 @@
+# Saving and Loading models
+
+Once trained, we'd like to deploy our models in some downstream applications. We may also want to resume a training run that was interrupted (e.g. due to a hardware issue) or simply continue training if model performance was still improving. 
+
+## Checkpointing
+Both of these use cases are addressed via Metis's 'checkpointing' system. The checkpointer saves the model weights, current training step, pseudo-random generator states and the optimiser (amongst other things) so that training may be resumed seamlessly.
+
+To enable checkpointing in your run simply set how often you'd like a checkpoint saved (number of steps)
+```yaml
+checkpointer:
+  save_every: 1000
+```
+And to continue training from an existing checkpoint we set `resume_from`,
+
+```yaml
+checkpointer:
+  resume_from: outputs/example_run/checkpoint
+```
+
+## Loading just the model weights
+In order to load just the model weights in a script we first instantiate the model and then load the weights into the model via
+
+```python
+ckpt = torch.load(path_to_checkpoint.ckpt, map_location='cpu', weights_only=False)
+model.load_state_dict(ckpt['model'])
+```

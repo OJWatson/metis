@@ -1,0 +1,28 @@
+---
+title: "Why sweep?"
+---
+
+
+## Sensitivity to hyperparameters
+
+The quality of a model is determined not only by its learning algorithm and data but also by *hyperparameters* which control the architecture or aspects of the learning algorithm. Models are often quite sensitive to these hyperparameters and so *sweeping* or *tuning* hyperparameters can lead to substantial performance improvemnents (or in some cases may be required to successfully train a model at all).
+
+
+Given that large neural networks can memorise their training data given sufficient training steps, it is important to maintain held-out i.i.d. data so that the model's ability to generalise beyond its training data can be assessed. Generally this entails partitioning datasets into a *training set* and a *tuning set*, with the majority of the data being allocated to the training set. Usually great care is taken to ensure that these sets are identically distributed without information about the tuning set being leaked in the training set. In Metis our dataloader automatically partitions datasets into train and tune by the parameter group, ensuring that all the realistions in a group are in one of the sets.
+
+## Basic sweeping
+The basic hyperparameter sweep workflow is:
+
+1. Choose hyperparameters to fix (e.g. batch size) and sweep over (e.g. learning rate)
+2. Choose the metric you'd like to target
+3. Define how you'd like to sample the sweep space (e.g. random, bayesian optimisation) and the number of training runs you'd like to do
+4. Launch one or more sweep agents
+5. Analyze sweep results and (if necessecary) launch another more targeted sweep
+
+Over the next few tutorials we'll see how to use tools like Weights & Biases to manage sweeps and a walkthrough of how sweeping works in Metis.
+
+
+<!-- ## Tune on validation, not test -->
+
+<!-- TODO: emphasise tuning on the validation set and keeping the test set held
+out for final evaluation. -->

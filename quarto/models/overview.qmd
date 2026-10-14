@@ -1,0 +1,17 @@
+---
+title: "Overview of the models"
+---
+
+METIS ships several model families. This page gives a very high-level comparison
+so you can pick a starting point; each model has its own page with detail.
+
+| Model | Stochastic | Training cost | Inference cost | Sequence conditioning | Exact density |
+|-------|:-----------:|:-------------:|:--------------:|:---------------------:|:----------------:|
+| [MLP](mlp.qmd) | ❌ | Low | Low | ❌ | ❌ |
+| [Transformer](transformer.qmd) |❌ | High| Medium| ✅ |❌ |
+| [Flow Matching](flow-matching.qmd) |✅  | High| High| ✅ |❌ |
+| [Normalising Flow](normalising-flow.qmd) | ✅| Medium| Medium|👷  | ✅|
+
+<!-- TODO: fill the table and add a sentence on how to read each column
+(stochastic vs deterministic, relative compute, whether it supports conditioning
+on a sequence, whether an exact likelihood is available). -->

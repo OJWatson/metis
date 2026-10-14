@@ -1,0 +1,121 @@
+---
+title: "METIS sweep config"
+---
+
+## Walkthrough: sweeping on SIRDS
+
+In this walkthrough we'll see how to setup a sweep for an MLP model on our SIRDS dataset. As with training, sweeps in Metis are driven through a config.
+
+### 1. Hyperparameters to sweep over
+For this walkthrough we'll focus on sweeping over the `peak_lr`, the `lr_warmup_frac`, the number of model blocks, and the hidden dimension of the model. We'll keep batch size, layers per block and the maximum number of steps fixed.
+
+:::{.callout-tip}
+If you're only going to sweep over one or two hyperparameters prioritise the `peak_lr` and `lr_warmup_frac`. They often have an outsized effect on model performance.
+:::
+
+
+### 2.Choosing a metric to optimise
+
+The most common metric to optimise is validation loss, however in some applications other metrics might be targeted. In Metis we default to targeting the final validation loss of our models (`final_val_loss`).
+
+### 3. Choosing the sampling strategy and number of runs
+
+Weights & Biases support sweeping strategies like `grid` where every single possibile combination of hyperparameters in the config is systemtically explored, `random` which just randomly samples from the possibile configurations and `bayes` which uses Bayesian optimisation to intelligently select the next sweep experiments. In this tutorial we'll stick to `bayes`. 
+
+Additionally, you have a choice of specifying the options for each hyperparameter as a fixed list, or with a sampling distribution over a certain range:
+
+
+```yaml
+  #Params to optimise
+  peak_lr:
+    min: 0.000001
+    max: 0.01 
+    distribution: log_uniform_values #log uniform sampling of [1e-6,1e-2] 
+  lr_warmup_frac: 
+    values: [0.0, 0.05, 0.1, 0.2, 0.3, 0.4] #fixed
+  model.num_blocks: 
+    min: 5
+    max: 20
+    distribution: int_uniform # compact way of writing [5,6,...,20]
+  model.hidden_dim: 
+    values: [128, 256, 512, 1024] #Fixed set of options
+```
+
+We don't explicitly set the number of runs in the config but its useful to decide this early on since with a smaller budget of experiments its likely better to keep your sampling strategy more focused. For this demo we'll plan on doing 50 runs.
+
+Putting everything together our sweep config looks like:
+
+
+```yaml
+program: train
+project: your_existing_weights_and_biases_project
+metric:
+  name: final_val_loss
+  goal: minimize
+
+method: bayes
+parameters:
+  #Fixed
+  sampling.generate_samples:
+    value: false #don't generate samples during sweeping
+  dataset: 
+    value: sirds
+  plot_loss_curves:
+    value: false #don't make unnecessary plots
+  model:
+    value: mlp_default #we'll modify mlp default
+  logger.use_wandb:
+    value: true #essential
+  logger.tags:
+    value: [mlp, sirds]
+  batch_size:
+    value: 128
+  max_steps:
+   value: 2000
+  
+  #Params to optimise
+  peak_lr:
+    min: 0.000001
+    max: 0.01 
+    distribution: log_uniform_values
+  lr_warmup_frac: 
+    values: [0.0, 0.05, 0.1, 0.2, 0.3, 0.4]
+  model.num_blocks: 
+    min: 5
+    max: 20
+    distribution: int_uniform
+  model.hidden_dim: 
+    values: [128, 256, 512, 1024]
+
+command:
+- ${env}
+- ${interpreter}
+- "-m"
+- ${program}
+- "--config-name"
+- "default"
+#These hydra options disable the creation of
+#output folders for all the runs
+- "hydra.output_subdir=null"
+- "hydra/job_logging=disabled"
+- "hydra/hydra_logging=disabled"
+- "hydra.run.dir=."
+- ${args_no_hyphens}
+```
+
+Save this to `configs/sweep/sirds/mlp.yaml`. Now we're ready to register our sweep with Weights & Biases:
+
+```bash
+uv run wandb sweep --project your_existing_weights_and_biases_project configs/sweep/sirds/mlp.yaml
+```
+This will output a string of the form `<entity>/<project-name>/<sweep-id>` that we'll give to weights and biases agents when launching sweeps.
+
+### 4. Launching agent sweeps
+
+Now that our sweep is registered with weights an biases it should appear in the sweeps section. We can now launch sweeper agents that launch runs on our behalf *locally* or on a remote system (e.g. a cluster). Furthermore, multiple sweep agents can be active at one time, allowing us to have multiple experiments running in parallel. The only requirement is that Metis is installed and all required files like configs and datasets are present on each system.
+
+To start an agent:
+
+```bash
+uv run wandb agent --count <this agent's experiment budget> <entity>/<project-name>/<sweep-id>
+```

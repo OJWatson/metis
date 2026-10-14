@@ -1,0 +1,513 @@
+---
+title: "VI and MCMC with iTarFlow"
+execute: 
+  eval: false
+---
+
+Metis's [Normalising Flow surrogate](../models/normalising-flow.qmd) provides an exact likelihood, enabling us to use it in-place of our simulator/data-generating processes's likelihood function in standard inference pipelines.
+
+:::{.callout-tip}
+Conceptually, we imagine that our true data-generating process, has some underlying likelihood $p^{*}(x|\theta)$, which is impractical to evaluate or otherwise inaccessible. In its place we are substituting the likelihood associated with our surrogate $\hat{p}(x|\theta)$ and hope that our surrogate has been trained sufficiently well that $\hat{p}(x|\theta)\approx p^{*}(x|\theta)$.
+:::
+
+## Setup
+
+Run the commands from the repository root in a terminal, or download this page
+as a notebook into `examples/` and run its cells. The setup cell below switches
+to the repository root. In a terminal, omit the notebook-only `%%bash` lines.
+
+```{python}
+import os
+from pathlib import Path
+
+if Path.cwd().name == "examples":
+    os.chdir("..")
+print("cwd:", Path.cwd())
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import torch.nn as nn
+from hydra.utils import instantiate
+from IPython.display import Image
+from omegaconf import OmegaConf
+
+from dataloader import prepare_splits
+from examples.sirds_simulator import simulate_sirds
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+torch.manual_seed(42)
+```
+
+## Train the surrogate
+As before, we'll train our normalising flow (NF) surrogate on the SIRDS dataset we prepared:
+
+```{python}
+%%bash
+uv run train.py \
+  --config-name default \
+  model=itarflow_default \
+  dataset=sirds \
+  max_steps=10_000 \
+  checkpointer.save_every=10_000 \
+  hydra.run.dir=outputs/sbi-tutorial-nf \
+  sampling.generate_samples=True \
+  sampling.samples_name=examples/sbi_tutorial_nf_realisations.png \
+  sampling.subsample=5
+```
+
+And visualise the surrogate's realisations to ensure it has fit the data well.
+```{python}
+Image(filename="examples/sbi_tutorial_nf_realisations.png")
+```
+
+## Load the trained surrogate
+
+The training command writes to `outputs/sbi-tutorial-nf`. We reconstruct the
+model from its saved configuration and load the final checkpoint.
+
+```{python}
+run_dir = Path("outputs/sbi-tutorial-nf")
+cfg = OmegaConf.load(run_dir / ".hydra/config.yaml")
+
+# These dimensions are set from the dataset by the training pipeline.
+cfg.model.out_channels = len(cfg.dataset.output_variables)
+cfg.model.num_timesteps = cfg.dataset.num_timesteps
+cfg.model.static_in = len(cfg.dataset.surrogate_input_variables)
+
+nf = instantiate(cfg.model).to(DEVICE)
+checkpoint = torch.load(
+    run_dir / "checkpoints/last.pt",
+    map_location="cpu",
+    weights_only=False,
+)
+nf.load_state_dict(checkpoint["model"])
+nf.eval()
+nf.requires_grad_(False)
+```
+
+The checkpoint does not contain normalization statistics, so we reproduce them
+from the same dataset using the training pipeline's preprocessing.
+
+```{python}
+_, _, input_stats, output_stats = prepare_splits(
+    cfg.dataset.path,
+    0.1,
+    42,
+    cfg.dataset.grouping_variables,
+    cfg.dataset.surrogate_input_variables,
+    cfg.dataset.output_variables,
+    cfg.dataset.num_timesteps,
+    cfg.dataset.trunc_until,
+    cfg.dataset.input_col_to_source_col,
+)
+
+# Static conditioning inputs use the statistics at the first timestep.
+input_mean = input_stats.means[:, 0].to(DEVICE)
+input_std = input_stats.stds[:, 0].to(DEVICE)
+
+# iTarFlow uses (batch, time, channels).
+series_mean = output_stats.means.T.to(DEVICE)
+series_std = output_stats.stds.T.to(DEVICE)
+```
+
+## Preparing an observation
+
+For this tutorial we'll generate our observation from our SIRDS simulator.
+We infer the initial infected fraction $I_0$, beta, gamma and omega, treating
+only the mortality rate as known.
+
+```{python}
+TRUE_I0 = 0.02
+TRUE_BETA = 0.45
+TRUE_GAMMA = 0.12
+TRUE_OMEGA = 0.025
+TRUE_MU = 0.01
+
+S_obs, I_obs, R_obs, D_obs = simulate_sirds(
+    I0=TRUE_I0, beta=TRUE_BETA, gamma=TRUE_GAMMA, omega=TRUE_OMEGA,
+    mu=TRUE_MU, T=cfg.dataset.num_timesteps, seed=999,
+)
+y_obs_raw = np.stack([S_obs, I_obs, R_obs, D_obs], axis=-1)[1:]  # drop t=0
+y_obs = torch.as_tensor(y_obs_raw, dtype=torch.float32, device=DEVICE)
+y_obs = ((y_obs - series_mean) / series_std).unsqueeze(0)
+```
+
+## Choosing the prior
+
+We'll assume independent uniform priors:
+$$
+\begin{align}
+&I_0 \sim \mathcal{U}(0.01, 0.1)\\
+&\beta \sim \mathcal{U}(0.2, 0.8)\\
+&\gamma \sim \mathcal{U}(0.05, 0.3)\\
+&\omega \sim \mathcal{U}(0.005, 0.05)
+\end{align}
+$$
+
+
+## The inference problem
+Given our observation $x'$, our choice of priors $p(\theta)$ and our trained surrogate we have an *unnormalised* posterior density,
+
+$$
+p(\theta|x=x') \propto \hat{p}(x=x'|\theta)p(\theta)
+$$
+
+To obtain samples from the posterior we need to either fit a parametrised distribution or run MCMC.
+
+## Variational Inference
+We introduce a parametrised distribution $q_{\phi}$, in this case a multivariate Gaussian transformed to lie within the parameter bounds, and maximise the Evidence Lower Bound (ELBO):
+$$
+\max_{\phi}\;\mathbb{E}_{\theta\sim q_{\phi}(\theta)}[\log \hat{p}(x=x'|\theta)] - \mathrm{KL}[q_{\phi}(\theta)\,\vert\vert\,p(\theta)]
+$$
+
+:::{.callout-note}
+This is equivalent to minimising the *reverse* KL-divergence between $q_{\phi}$ and the posterior.
+:::
+
+We implement this in code using PyTorch's distributions module.
+
+```{python}
+import math
+import torch.nn.functional as F
+import torch.distributions as dist
+
+PARAM_BOUNDS = {
+    "I_0": (0.01, 0.1),
+    "beta": (0.2, 0.8),
+    "gamma": (0.05, 0.3),
+    "omega": (0.005, 0.05),
+}
+lo = torch.tensor([b[0] for b in PARAM_BOUNDS.values()], device=DEVICE)
+hi = torch.tensor([b[1] for b in PARAM_BOUNDS.values()], device=DEVICE)
+
+DATA_DIM = y_obs[0].numel()
+
+n_params = len(PARAM_BOUNDS)
+q_mu = nn.Parameter(torch.zeros(n_params, device=DEVICE))
+q_L_flat = nn.Parameter(torch.zeros(n_params * (n_params + 1) // 2, device=DEVICE))
+
+def build_q():
+    L = torch.zeros(n_params, n_params, device=DEVICE)
+    idx = torch.tril_indices(n_params, n_params, device=DEVICE)
+    L[idx[0], idx[1]] = q_L_flat
+    diag_idx = torch.arange(n_params, device=DEVICE)
+    L[diag_idx, diag_idx] = F.softplus(L[diag_idx, diag_idx]) + 1e-4
+
+    base = dist.MultivariateNormal(q_mu, scale_tril=L)
+    transforms = [dist.SigmoidTransform(), dist.AffineTransform(loc=lo, scale=(hi - lo))]
+    return dist.TransformedDistribution(base, transforms)
+
+with torch.no_grad():
+    centre = (lo + hi) / 2
+    q_mu.copy_(torch.logit((centre - lo) / (hi - lo)))
+
+print(f"Initial q centre (constrained): {build_q().sample().detach().cpu().numpy()}")
+```
+
+Now the objective:
+```{python}
+def make_conditioning(theta_samples):
+    fixed = torch.ones_like(theta_samples[:, 0])
+    values = {
+        "I_0": theta_samples[:, 0],
+        "beta": theta_samples[:, 1],
+        "gamma": theta_samples[:, 2],
+        "omega": theta_samples[:, 3],
+        "mu": TRUE_MU * fixed,
+    }
+    full_params = torch.stack(
+        [values[name] for name in cfg.dataset.surrogate_input_variables],
+        dim=1,
+    )
+    return (full_params - input_mean) / input_std
+
+
+def compute_log_likelihood(y, theta_samples):
+    n_mc = theta_samples.shape[0]
+    full_params = make_conditioning(theta_samples)
+    y_batch = y.expand(n_mc, -1, -1)
+
+    z, total_logdet_scaled = nf(y_batch, full_params)
+
+    log_pz = -0.5 * z.reshape(n_mc, -1).pow(2).sum(dim=1) \
+             - 0.5 * DATA_DIM * math.log(2 * math.pi)
+    true_logdet = DATA_DIM * total_logdet_scaled
+    return log_pz + true_logdet
+
+
+def compute_elbo(n_mc=32):
+    q = build_q()
+    theta_samples = q.rsample((n_mc,))
+    theta_clamped = torch.stack([
+        theta_samples[:, i].clamp(lo[i] + 1e-6, hi[i] - 1e-6)
+        for i in range(n_params)
+    ], dim=1)
+
+    log_lik = compute_log_likelihood(y_obs, theta_clamped)
+    log_q = q.log_prob(theta_clamped)
+    log_prior = -torch.log(hi - lo).sum()
+
+    return (log_lik + log_prior - log_q).mean()
+```
+
+Finally, we optimise 
+
+```{python}
+nf.eval()
+
+vi_optimizer = torch.optim.Adam([q_mu, q_L_flat], lr=0.02)
+n_vi_steps = 1500
+n_mc = 32
+elbo_history = []
+
+for step in range(n_vi_steps):
+    vi_optimizer.zero_grad()
+    elbo = compute_elbo(n_mc=n_mc)
+    (-elbo).backward()
+    torch.nn.utils.clip_grad_norm_([q_mu, q_L_flat], max_norm=5.0)
+    vi_optimizer.step()
+    elbo_history.append(elbo.item())
+
+    if step % 100 == 0 or step == n_vi_steps - 1:
+        with torch.no_grad():
+            q = build_q()
+            mean_c = q.sample((1000,)).mean(dim=0)
+        means = ", ".join(
+            f"{name}={mean_c[i]:.4f}" for i, name in enumerate(PARAM_BOUNDS)
+        )
+        print(f"Step {step:4d}  ELBO={elbo.item():10.1f}  q_mean=[{means}]")
+```
+Now we plot the ELBO over time and the approximate posterior:
+
+```{python}
+fig, ax = plt.subplots(1, 1, figsize=(8, 3))
+ax.plot(elbo_history, lw=0.5, alpha=0.4, label="ELBO")
+window = 50
+if len(elbo_history) > window:
+    smoothed = np.convolve(elbo_history, np.ones(window) / window, mode="valid")
+    ax.plot(np.arange(window - 1, len(elbo_history)), smoothed, lw=2, color="red",
+            label=f"{window}-step moving avg")
+ax.set(xlabel="VI step", ylabel="ELBO")
+ax.legend()
+plt.tight_layout()
+
+# Corner plot
+with torch.no_grad():
+    q_final = build_q()
+    posterior_samples = q_final.sample((5000,)).cpu().numpy()
+
+param_names = [r"$I_0$", r"$\beta$", r"$\gamma$", r"$\omega$"]
+true_vals = [TRUE_I0, TRUE_BETA, TRUE_GAMMA, TRUE_OMEGA]
+bounds = list(PARAM_BOUNDS.values())
+
+fig2, axes2 = plt.subplots(n_params, n_params, figsize=(10, 10))
+for i in range(n_params):
+    for j in range(n_params):
+        ax = axes2[i, j]
+        if j > i:
+            ax.axis("off")
+            continue
+        if i == j:
+            ax.hist(posterior_samples[:, i], bins=50, density=True,
+                    color="steelblue", alpha=0.7, edgecolor="none")
+            ax.axvline(true_vals[i], color="red", lw=2, ls="--", label="True")
+            ax.set_xlim(bounds[i])
+            if i == 0:
+                ax.legend(fontsize=8)
+        else:
+            ax.hist2d(posterior_samples[:, j], posterior_samples[:, i],
+                      bins=40, cmap="Blues", density=True)
+            ax.axvline(true_vals[j], color="red", lw=1, ls="--")
+            ax.axhline(true_vals[i], color="red", lw=1, ls="--")
+            ax.scatter([true_vals[j]], [true_vals[i]], color="red", s=30, zorder=5)
+            ax.set_xlim(bounds[j])
+            ax.set_ylim(bounds[i])
+        if j == 0:
+            ax.set_ylabel(param_names[i])
+        if i == n_params - 1:
+            ax.set_xlabel(param_names[j])
+
+plt.suptitle(r"Approximate Posterior $q(I_0, \beta, \gamma, \omega \mid y_{obs})$", fontsize=13)
+plt.tight_layout()
+```
+
+Final sanity check:
+
+
+```{python}
+with torch.no_grad():
+    q_final = build_q()
+    theta_post = q_final.sample((10,))
+    full_params_post = make_conditioning(theta_post)
+
+    z_rand = torch.randn((10, *y_obs.shape[1:]), device=DEVICE)
+    pp_samples, _ = nf.reverse(z_rand, full_params_post)
+    pp_samples = pp_samples * series_std + series_mean
+    pp_samples = pp_samples.clamp(min=0).cpu().numpy()
+
+colors_pp = {"S": "#2E86AB", "I": "#C73E1D", "R": "#6A994E", "D": "#C21B8A"}
+
+fig, ax = plt.subplots(1, 1, figsize=(12, 4.5))
+for s in range(pp_samples.shape[0]):
+    for j, (label, color) in enumerate(colors_pp.items()):
+        ax.plot(pp_samples[s, :, j], color=color, alpha=0.6, lw=0.8)
+
+for j, (label, color) in enumerate(colors_pp.items()):
+    ax.plot(y_obs_raw[:, j], color=color, lw=2.5, ls="--", label=f"{label} (observed)")
+
+ax.set(xlabel="time (days)", ylabel="count", title="Posterior Predictive Check")
+ax.legend()
+plt.tight_layout()
+
+print("=" * 60)
+print("Variational Inference Results")
+print("=" * 60)
+with torch.no_grad():
+    vi_samples = q_final.sample((10000,)).cpu().numpy()
+for i, (name, true_val) in enumerate(zip(PARAM_BOUNDS, true_vals)):
+    mean = vi_samples[:, i].mean()
+    std = vi_samples[:, i].std()
+    q025 = np.percentile(vi_samples[:, i], 2.5)
+    q975 = np.percentile(vi_samples[:, i], 97.5)
+    print(f"  {name:6s}: mean={mean:.4f} +/- {std:.4f}  "
+          f"95% CI=[{q025:.4f}, {q975:.4f}]  true={true_val:.4f}  "
+          f"{'OK' if q025 <= true_val <= q975 else 'MISS'}")
+```
+
+## MCMC
+
+We can also sample from the same surrogate-based posterior using Pyro's
+No-U-Turn Sampler (NUTS), an adaptive Hamiltonian Monte Carlo method. We reuse
+the uniform priors, observation, and `compute_log_likelihood` above; the
+mortality rate remains fixed.
+
+Pyro is optional. Install it into the project's environment before continuing
+(the package is named `pyro-ppl`, but imported as `pyro`):
+
+```{python}
+%%bash
+uv pip install pyro-ppl
+```
+
+Each `pyro.sample` declares a parameter's prior. `pyro.factor` adds the
+surrogate log-likelihood to the joint log density. Pyro handles the transforms
+between bounded parameters and the unconstrained space used by NUTS.
+Keep gradients enabled through the surrogate, just as for VI.
+
+```{python}
+import pyro
+import pyro.distributions as pyro_dist
+from pyro.infer import MCMC, NUTS
+
+pyro.set_rng_seed(42)
+
+def posterior_model():
+    theta = torch.stack([
+        pyro.sample(name, pyro_dist.Uniform(lo[i], hi[i]))
+        for i, name in enumerate(PARAM_BOUNDS)
+    ])
+    log_lik = compute_log_likelihood(y_obs, theta.unsqueeze(0))[0]
+    pyro.factor("surrogate_likelihood", log_lik)
+```
+
+Warmup adapts the step size and mass matrix, and its draws are discarded.
+We use a full mass matrix to accommodate correlations between the parameters.
+This example runs one chain for straightforward notebook execution.
+
+```{python}
+kernel = NUTS(posterior_model, full_mass=True, target_accept_prob=0.8)
+mcmc = MCMC(kernel, warmup_steps=500, num_samples=1000, num_chains=1)
+mcmc.run()
+mcmc.summary(prob=0.95)
+
+mcmc_draws = mcmc.get_samples()
+theta_mcmc = torch.stack([mcmc_draws[name] for name in PARAM_BOUNDS], dim=1)
+mcmc_samples = theta_mcmc.detach().cpu().numpy()
+```
+
+Inspect the effective sample sizes, divergences, and trace plots before
+interpreting the posterior. The single-chain summary uses a split-chain
+R-hat; it does not replace checking agreement across independently initialized
+chains. Increase warmup or sampling length if mixing is poor.
+
+### MCMC trace plots
+
+Plot the retained MCMC draws in sampling order to inspect mixing. Dashed
+lines mark the true parameter values.
+
+```{python}
+fig, axes = plt.subplots(n_params, 1, figsize=(10, 2.5 * n_params), sharex=True)
+for i, name in enumerate(PARAM_BOUNDS):
+    axes[i].plot(mcmc_samples[:, i], lw=0.6)
+    axes[i].axhline(true_vals[i], color="red", ls="--", label="True")
+    axes[i].set(ylabel=param_names[i])
+axes[-1].set_xlabel("MCMC draw")
+axes[0].legend()
+plt.tight_layout()
+```
+
+### MCMC posterior predictive check
+
+Finally, draw trajectories conditional on samples from the MCMC posterior,
+using the same conditioning and inverse normalization as for VI.
+
+```{python}
+with torch.no_grad():
+    selected = torch.randperm(theta_mcmc.shape[0], device=theta_mcmc.device)[:10]
+    conditioning = make_conditioning(theta_mcmc[selected])
+    z_rand = torch.randn((len(selected), *y_obs.shape[1:]), device=DEVICE)
+    mcmc_pp, _ = nf.reverse(z_rand, conditioning)
+    mcmc_pp = (mcmc_pp * series_std + series_mean).clamp(min=0).cpu().numpy()
+
+fig, ax = plt.subplots(figsize=(12, 4.5))
+for sample in mcmc_pp:
+    for j, (label, color) in enumerate(colors_pp.items()):
+        ax.plot(sample[:, j], color=color, alpha=0.6, lw=0.8)
+for j, (label, color) in enumerate(colors_pp.items()):
+    ax.plot(y_obs_raw[:, j], color=color, lw=2.5, ls="--", label=f"{label} (observed)")
+ax.set(xlabel="time (days)", ylabel="count", title="MCMC Posterior Predictive Check")
+ax.legend()
+plt.tight_layout()
+```
+
+### VI and MCMC posterior comparison
+
+Overlay the marginal densities on the diagonal and joint samples below it
+to compare both uncertainty and correlations. The joint panels show an equal
+number of draws from each method; dashed lines mark the true parameters.
+
+```{python}
+fig, axes = plt.subplots(n_params, n_params, figsize=(10, 10))
+comparison_samples = [("VI", posterior_samples, "steelblue"),
+                      ("MCMC", mcmc_samples, "darkorange")]
+n_show = min(1000, len(posterior_samples), len(mcmc_samples))
+for i in range(n_params):
+    for j in range(n_params):
+        ax = axes[i, j]
+        if j > i:
+            ax.axis("off")
+            continue
+        if i == j:
+            bins = np.linspace(*bounds[i], 60)
+            for label, samples, color in comparison_samples:
+                ax.hist(samples[:, i], bins=bins, density=True,
+                        histtype="step", lw=1.8, color=color, label=label)
+            ax.axvline(true_vals[i], color="black", ls="--", label="True")
+            ax.set_xlim(bounds[i])
+        else:
+            for label, samples, color in comparison_samples:
+                ax.scatter(samples[:n_show, j], samples[:n_show, i],
+                           s=5, alpha=0.15, color=color, rasterized=True)
+            ax.axvline(true_vals[j], color="black", ls="--", lw=1)
+            ax.axhline(true_vals[i], color="black", ls="--", lw=1)
+            ax.set_xlim(bounds[j])
+            ax.set_ylim(bounds[i])
+        if j == 0:
+            ax.set_ylabel("Density" if i == 0 else param_names[i])
+        if i == n_params - 1:
+            ax.set_xlabel(param_names[j])
+axes[0, 0].legend()
+fig.suptitle("VI and MCMC posterior comparison")
+plt.tight_layout()
+```
