@@ -124,12 +124,18 @@ def prepare_colab(revision):
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "pyproject.toml").write_text(_project_text(revision), encoding="utf-8")
     loaded = {
-        package: _installed_version(package)
+        package: str(getattr(sys.modules[package], "__version__", _installed_version(package)))
         for package in ("numpy", "pandas", "torch", "matplotlib", "pyarrow", "polars")
         if package in sys.modules
     }
     metis_was_loaded = "metis" in sys.modules
     previous_metis_origin = _metis_origin()
+    if metis_was_loaded:
+        # Retain the import's identity if the user reruns setup after a restart
+        # warning without actually restarting the Python process.
+        previous_metis_origin = sys.modules["metis"].__dict__.setdefault(
+            "_notebook_runtime_origin", previous_metis_origin,
+        )
     environment = os.environ.copy()
     # Colab is a disposable runtime. Keep its unrelated packages and its active
     # notebook interpreter, instead of adding a second environment to sys.path.

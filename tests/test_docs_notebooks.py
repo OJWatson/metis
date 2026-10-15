@@ -151,7 +151,7 @@ def test_colab_setup_retains_runtime_packages_and_requires_restart_if_loaded_lib
     monkeypatch.setattr(setup, "_uv_executable", lambda directory: "uv")
     monkeypatch.setattr(setup, "_installed_version", installed.get)
     monkeypatch.setattr(setup, "_metis_origin", lambda: None)
-    monkeypatch.setitem(sys.modules, "numpy", object())
+    monkeypatch.setitem(sys.modules, "numpy", SimpleNamespace(__version__="1.26.4"))
 
     def install(command, **kwargs):
         assert "--inexact" in command
@@ -161,5 +161,8 @@ def test_colab_setup_retains_runtime_packages_and_requires_restart_if_loaded_lib
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(setup.subprocess, "run", install)
+    with pytest.raises(RuntimeError, match="Restart session"):
+        setup.prepare_colab("a" * 40)
+    # Merely rerunning setup must not mistake the new files for a fresh import.
     with pytest.raises(RuntimeError, match="Restart session"):
         setup.prepare_colab("a" * 40)
