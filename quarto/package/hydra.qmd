@@ -29,7 +29,7 @@ Each run saves a complete model, training history, evaluation metrics and resolv
 configuration in its Hydra output directory. Relative data paths resolve from
 the directory where you launch the command.
 
-## Compare settings
+## Compare settings {#sweeps}
 
 ```bash
 uv run metis train --multirun model=mlp,transformer training.learning_rate=0.001,0.0003 evaluation.partition=validation
