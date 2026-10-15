@@ -25,3 +25,9 @@
   background: #ffe5a8;
   text-decoration: underline;
 }
+
+/* Keep executed notebook figures within the reading column on narrow screens. */
+.cell-output-display .quarto-figure img {
+  max-width: 100%;
+  height: auto;
+}
