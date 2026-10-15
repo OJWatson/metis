@@ -1,52 +1,49 @@
 ---
-title: "Training on multiple GPUs"
-execute:
-  eval: false
+title: "Training on multiple devices"
 ---
 
+![Forms of parallelism, from @raschka2023sometechniquestomakeyourpytorchmodel](images/forms_of_parallelism.png)
 
-![Common forms of parallelism during training. Taken from @raschka2023sometechniquestomakeyourpytorchmodel](images/forms_of_parallelism.png)
+The installed API supports data parallelism: workers process different parts
+of a global minibatch and average gradients before an optimizer update. Model
+parallelism and multi-node launching are not supplied by this interface.
 
-Metis can take advantage of multiple GPUs located in the same machine via *data parallelism*, wherein indentical copies of the model on separate GPUs are fed with different batches of data, their gradients aggregated and the overall parameter update copied to each GPU. Whilst more sophisticated forms of parallelism are possible, and often required at larger scales, we do not support them due to the complexity they introduce.
+## Configure devices
 
-## From one to four GPUs
-
-Complete the [advanced source setup](../basics/installing_metis.qmd) with a CUDA
-PyTorch build first. The commands below retain the checkout's optional
-dependencies through `--locked --all-extras`.
-
-Recall our usual single-GPU command,
+After the [CUDA setup](../package/quickstart.qmd#optional-cuda-setup):
 
 ```bash
-uv run --locked --all-extras python train.py --config-name default dataset=sirds
+uv run metis train training.device=cuda training.num_devices=4 training.batch_size=128
 ```
 
-To use four GPUs on one machine, set `num_gpus`:
+`batch_size` is global and must divide evenly by `num_devices`; here each worker
+processes 32 realizations. CUDA workers use NCCL and contiguous devices starting
+at the selected CUDA index. Restrict visible GPUs when necessary:
 
 ```bash
-uv run --locked --all-extras python train.py --config-name default dataset=sirds num_gpus=4
+CUDA_VISIBLE_DEVICES=2,3 uv run metis train training.device=cuda training.num_devices=2 training.batch_size=128
 ```
 
-`train.py` starts one worker process per GPU itself, so everything else (Hydra output directories, checkpoints, wandb logging, `--multirun` sweeps) works exactly as it does on one GPU.
-
-In cases where you want to use only a subset of the GPUs, the `CUDA_VISIBLE_DEVICES` environment variable can be used to restrict the GPUs visible to `train.py`. For example, to train on only GPUs `2` and `3`:
+CPU workers use Gloo:
 
 ```bash
-CUDA_VISIBLE_DEVICES=2,3 uv run --locked --all-extras python train.py --config-name default dataset=sirds num_gpus=2
+uv run metis train training.device=cpu training.num_devices=2 training.batch_size=128
 ```
 
+This is useful for correctness checks; multiprocessing overhead can make small
+CPU jobs slower. One device remains the default. Device minibatching does not
+make the simulation bank out of core: it must still fit in host memory.
 
-
-## Batch size
-
-`batch_size` is the global batch size across all GPUs. It must be divisible by `num_gpus`. For example, `batch_size=128` with four GPUs gives each GPU 32 samples per optimizer step.
-
-
+The Python equivalent is `TrainingConfig(device="cuda", num_devices=4,
+batch_size=128)`. Launch multiprocessing scripts under
+`if __name__ == "__main__":`; use the installed CLI for a straightforward
+notebook-to-terminal transition. Checkpoint resume requires the same topology.
 
 ## Troubleshooting
 
-Common checks when a job fails to start:
+- Check visible GPU count and PyTorch CUDA availability before selecting CUDA.
+- Check global batch-size divisibility.
+- Use `NCCL_DEBUG=INFO` to investigate CUDA communication failures.
+- Establish a successful one-device run before diagnosing distributed behavior.
 
-- Confirm `nvidia-smi` lists at least `num_gpus` visible GPUs.
-- Confirm `batch_size` is divisible by `num_gpus`.
-- Set `NCCL_DEBUG=INFO` before the command when diagnosing NCCL initialization or communication failures.
+A passing CPU distributed test does not validate a CUDA driver/NCCL stack.

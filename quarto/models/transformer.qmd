@@ -5,7 +5,7 @@ The autoregressive transformer model is a flexible and deterministic surrogate.
 
 ## When this might be a good fit
 
-The transformer is a great option when a deterministic surrogate suffices. Furthermore, it is more flexible than an MLP, supporting conditioning on both static inputs and sequences. Additionally, because it is autoregressive it naturally supports variable length outputs and starting generation from a variable number of observed datapoints. 
+The transformer is a great option when a deterministic surrogate suffices. Furthermore, it is more flexible than an MLP, supporting conditioning on both static inputs and sequences. The installed API uses a fixed training grid; observed sequences are explicitly selected conditioning channels rather than an arbitrary observed prefix.
 
 Unfortunately, Transformer surrogates are slower to train and infer with and often require more tuning to match the performance of an MLP. However, they tend to benefit more from scaling data or the size of the network.
 
@@ -14,9 +14,9 @@ Unfortunately, Transformer surrogates are slower to train and infer with and oft
 ## How transformers work
 
 ### Architectural walkthrough
-The transformer architecture is substantially more complex than an MLP's so we won't cover it in great depth here. 
+The transformer architecture is substantially more complex than an MLP's so we won't cover it in great depth here.
 
-The most important part of the Transformer architecture is the *self-attention* mechansim which enables the model to process sequence data in a highly expressive way. In an attention computation, the entries of an incoming sequence $x_1, x_2, \dots, x_n$ are given corresponding *query*, *key* and *value* vectors via projection matrices (e.g. $q_1=W_{q}x_1^T$).  These entries are collected in a $Q$ (query), $K$ (key) and $V$ (value) matrix and the transformed sequence is computed via $y=\mathrm{softmax}(\frac{QK^T}{\sqrt{d}})V$. In an autoregressive transformer this computation is restricted so that query vectors may only *attend* to key vectors from the past:
+The most important part of the Transformer architecture is the *self-attention* mechanism which enables the model to process sequence data in a highly expressive way. In an attention computation, the entries of an incoming sequence $x_1, x_2, \dots, x_n$ are given corresponding *query*, *key* and *value* vectors via projection matrices (e.g. $q_1=W_{q}x_1^T$).  These entries are collected in a $Q$ (query), $K$ (key) and $V$ (value) matrix and the transformed sequence is computed via $y=\mathrm{softmax}(\frac{QK^T}{\sqrt{d}})V$. In an autoregressive transformer this computation is restricted so that query vectors may only *attend* to key vectors from the past:
 
 ::: {#fig-causal-attention}
 ![](images/causal-attention-mask.svg){fig-alt="Causal self-attention mask showing that x4 can attend to x1 through x4 but not x5."}
@@ -40,9 +40,9 @@ In Metis we also support options like interleaving full self-attention with *sli
 
 
 ::: {#fig-sliding-window-attention}
-![](images/sliding-window-attention-mask.svg){fig-alt="""}
+![](images/sliding-window-attention-mask.svg){fig-alt="Sliding window attention limits each position to nearby earlier positions."}
 
-Sliding window self-attention: Later tokens may not attend to the furtherest tokens in the past.
+Sliding window self-attention: Later tokens may not attend to the furthest tokens in the past.
 :::
 
 We additionally support specifying fewer key-value heads (i.e. projections) than query heads to make attention more efficient and reduce the size of the KV-cache. This is known as *Grouped-Query Attention*.
@@ -55,52 +55,29 @@ Grouped-query attention: Multiple query heads share each key-value head.
 
 <!-- TODO: brief primer — attention, embeddings, sequence conditioning. -->
 
-### Training 
+### Training
 
 Language transformers train with *Cross-Entropy Loss* over tokens but since our data is typically continuous, we use a next-token MSE loss.
 
 ## Configuring a Transformer
 
-The Transformer architecture is configured via these variables:
+The installed `model=transformer` preset uses `n_layer=2`, `n_head=4`,
+`n_kv_head=4`, `n_embd=64`. Layers control depth; embedding width controls capacity.
+Query/key-value heads split attention into subspaces. Width must divide cleanly
+among the heads, and query heads must be compatible with key-value heads.
+Sequence length and static/output dimensions come from the bank.
 
-* `sequence_len`
-* `x_input_dim`
-* `static_input_dim`
-* `n_layer`: The number of transformer blocks in the model
-* `n_head`: The number of query heads in each attention layer
-* `n_kv_head`: The number of key and value heads in each attention layer
-* `rope_base`: Base frequency for the rotary positional embeddings, don't alter unless you really need to
-* `n_embd`: Hidden dimension of the network (controls width)
-* `in_and_out_biases`: Whether the input and output projection layers use learned biases
-* `window_pattern`: Sliding window attention pattern string. 'L' (Long) for full context and 'S' (Short) for half context. Final layer is always 'L'. (e.g. 'SL' would alternate between short and long context)
-* `cross_attn`: The cross attention config for sequence conditioning, can be `None`
-
-The `sequence_len`, `x_input_dim` and `static_input_dim` are all automatically configured based on the dataset config.
-
-Within Metis we provide Transformer size presets:
-
-| Config | `n_layer` | `n_head` | `n_kv_head` | `n_embd` | `window_pattern` |
-|---|---:|---:|---:|---:|---|
-| `transformer_small` | 6 | 4 | 4 | 64 | `L` |
-| `transformer_default` | 12 | 8 | 8 | 128 | `L` |
-| `transformer_large` | 16 | 16 | 16 | 256 | `L` |
-
-Whilst the standard configs exclusively make use of full attention you may find it beneficial use an interleaved pattern for computational reasons. Similarly, it may be helpful to use more query heads than kv heads (i.e. Grouped Query Attention).
-
-<!-- TODO: size configs and what each architecture parameter means (e.g. the
-embedding dimension), for someone writing their own config. -->
-
-```yaml
-defaults:
-  - transformer_default
-  - _self_
-
-n_layer: ...
-n_head: ... 
-n_kv_head: ...
-rope_base: ...
-n_embd: ...
-in_and_out_biases: ...
-window_pattern: ...
-cross_attn: ...
+```bash
+uv run metis train model=transformer model.model_options.n_layer=4 model.model_options.n_embd=128
 ```
+
+Optional architecture settings include `window_pattern` (`L` full attention,
+`S` shorter context), `rope_base` and `in_and_out_biases`. To add an option omitted
+from the preset, use e.g. `+model.model_options.window_pattern=SL`. Defaults use
+full attention. Configure observed sequences through
+`model.observed_outputs=[intervention]`, not a low-level cross-attention object;
+see [sequence conditioning](../package/conditioning.qmd).
+
+The public API predicts the fitted fixed grid. The underlying autoregressive
+architecture does not imply public support for arbitrary horizons or observed
+prefix continuation. Evaluate autonomous rollouts as well as next-step loss.

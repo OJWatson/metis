@@ -27,7 +27,13 @@ def command(tmp_path, *arguments, module=False):
     executable = (
         [sys.executable, "-m", "metis.hydra_app"]
         if module
-        else [str(Path(sys.executable).with_name("metis-train"))]
+        else [
+            str(
+                Path(sys.executable).with_name(
+                    "metis-train.exe" if os.name == "nt" else "metis-train"
+                )
+            )
+        ]
     )
     result = subprocess.run(
         [*executable, *arguments],
@@ -183,3 +189,50 @@ def test_real_offline_wandb_training_needs_no_credentials(tmp_path, monkeypatch)
     assert (output / "model.pt").exists()
     assert (output / "metrics.json").exists()
     assert list((output / "wandb").glob("offline-run-*/run-*.wandb"))
+
+
+def test_conditioned_hydra_checkpoints_resume_after_directory_change(tmp_path):
+    from metis import Surrogate
+
+    frame = pl.DataFrame(
+        [
+            {"theta": float(i), "rep": 0, "t": t, "target": i + t, "obs": i - t * 0.1}
+            for i in range(8)
+            for t in range(3)
+        ]
+    )
+    frame.write_parquet(tmp_path / "bank.parquet")
+    options = (
+        "dataset=parquet",
+        "dataset.path=bank.parquet",
+        "dataset.inputs=[theta]",
+        "dataset.outputs=[target,obs]",
+        "model=transformer",
+        "model.observed_outputs=[obs]",
+        "model.model_options.n_embd=16",
+        "model.model_options.n_layer=1",
+        "training.steps=2",
+        "training.batch_size=4",
+        "training.eval_every=1",
+        "training.checkpoint_dir=checkpoints",
+        "training.checkpoint_every=1",
+        "training.schedule=warmup_cosine",
+        "hydra.job.chdir=true",
+    )
+    command(tmp_path, *options, "hydra.run.dir=first")
+    assert (tmp_path / "first/checkpoints/last.pt").exists()
+    command(
+        tmp_path,
+        *options,
+        "training.resume_from=first/checkpoints/last.pt",
+        "hydra.run.dir=resumed",
+    )
+    first = Surrogate.load(tmp_path / "first/model.pt")
+    resumed = Surrogate.load(tmp_path / "resumed/model.pt")
+    assert first.history == resumed.history
+    assert first.observed_outputs == ("obs",)
+    conditions = np.ones((1, 3, 1))
+    np.testing.assert_array_equal(
+        first.predict([[3.0]], conditioning=conditions),
+        resumed.predict([[3.0]], conditioning=conditions),
+    )

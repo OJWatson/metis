@@ -2,39 +2,165 @@
 title: "Public API reference"
 ---
 
-All objects below are exported from `metis`. Python docstrings describe their
-arguments and exceptions. Hydra constructs these same objects.
+Python and Hydra construct the same objects and call the same training engine.
+Import the main objects from `metis`; optional helpers have their own modules.
+All inputs to the public API are in original data units. Let `N` mean simulation
+runs, `P` static inputs, `T` timepoints, `C` predicted outputs, `K` observed
+conditioning channels, `B` requested parameter settings and `S` generated samples.
 
-| Object or method | Contract |
+## SimulationDataset
+
+```python
+from metis import SimulationDataset, DatasetSplit
+
+bank = SimulationDataset.from_parquet(
+    "bank.parquet", inputs=["rate"], outputs=["response"],
+    groups=None, time="t", replicate="rep",
+)
+# Or: SimulationDataset.from_frame(polars_or_pandas_frame, same_keyword_arguments)
+# Or: SimulationDataset.from_arrays(
+#     x, y, input_names=["rate"], output_names=["response"],
+#     times=None, group_keys=None, replicate_ids=None,
+# )
+```
+
+`from_parquet` and `from_frame` require named numeric columns and complete runs.
+Array input is `(N,P)` and output `(N,T,C)`; omitted times are `0,...,T-1`,
+omitted groups are identical input tuples, and omitted replicate IDs are run
+indices. Data are immutable snapshots. Access `inputs`, `outputs`, `input_names`,
+`output_names`, `times`, `group_keys`, `replicate_ids` and the content
+`fingerprint`; `len(bank)` counts runs. `bank.subset(indices)` preserves metadata.
+
+`bank.split(validation_fraction=.2, test_fraction=.2, seed=42)` returns
+`DatasetSplit(train, validation, test)`. Zero disables an optional partition.
+`DatasetSplit.from_datasets(train, validation=None, test=None)` validates already
+split banks. Schemas and grids must agree; group identities must not overlap.
+Errors report nonfinite values, duplicates, incomplete grids, changing static
+inputs, invalid identities or too few groups. See [data contracts](data.qmd).
+
+## Surrogate and fitting
+
+```python
+from metis import Surrogate, TrainingConfig
+
+surrogate = Surrogate(
+    model="mlp", model_options={"hidden_dim": 64}, observed_outputs=None,
+)
+surrogate.fit(
+    split.train, validation=split.validation,
+    config=TrainingConfig(steps=500), on_progress=None,
+)
+```
+
+`model` is `mlp`, `transformer`, `flow_matching` or `itarflow`. Architecture
+options are flat dictionaries; dimensions are inferred from the bank. Unknown
+options or dimension overrides fail. `observed_outputs=[names]` selects channels
+from the full training output schema for transformer or flow matching only.
+The remaining channels are predicted, in original schema order.
+
+`fit` returns the same fitted `Surrogate`, fits scaling on training data only,
+and restores the best validation weights when validation is supplied.
+`patience` requires validation. `on_progress(record)` receives a copy containing
+`step`, `train_loss`, learning-rate information and, on evaluation steps,
+`validation_loss`. Callback exceptions propagate. Validation uses each family's
+training objective; compare families with common held-out metrics instead.
+
+### TrainingConfig
+
+| Field | Default | Meaning |
+|---|---|---|
+| `steps` | `500` | Total optimizer updates, including updates before a resume |
+| `batch_size` | `64` | Global batch size, divisible by `num_devices` |
+| `learning_rate`, `weight_decay` | `.001`, `.001` | AdamW settings |
+| `optimizer_betas` | `None` | AdamW defaults `.9, .999`; optional pair |
+| `seed`, `device` | `42`, `"cpu"` | Random seed and CPU or `cuda[:index]` |
+| `eval_every`, `patience` | `50`, `None` | Validation cadence; optional count of validation checks without improvement |
+| `schedule` | `"constant"` | Or `"warmup_cosine"` |
+| `warmup_fraction`, `min_learning_rate` | `.2`, `1e-6` | Warm-up fraction of total updates and cosine floor |
+| `precision` | `"fp32"` | Or `"tf32"` (CUDA) / `"bf16"` autocast |
+| `compile_model`, `deterministic` | `False`, `False` | Optional compilation and deterministic algorithms; not combined |
+| `num_devices` | `1` | CPU workers or contiguous CUDA devices |
+| `checkpoint_every`, `checkpoint_dir` | `None`, `None` | Enable resumable training checkpoints with a cadence and directory |
+| `resume_from` | `None` | A compatible training checkpoint, with unchanged scientific settings and total steps |
+
+Warm-up uses `floor(steps * warmup_fraction)` updates, then cosine decay. See
+[training](../basics/training.qmd) and [distributed training](../utils/distributed-training.qmd)
+for numerical and hardware limitations. Multiprocess Python scripts need a
+`if __name__ == "__main__":` guard. Device/precision support must be validated on
+your hardware; the package does not select a device or numerical mode for you.
+
+## Prediction and density
+
+| Method | Return and options |
 |---|---|
-| `SimulationDataset.from_parquet(path, inputs=..., outputs=..., groups=None, time="t", replicate="rep")` | Read and validate complete numeric trajectories |
-| `SimulationDataset.from_frame(frame, ...)` | Equivalent input from a pandas or Polars frame |
-| `SimulationDataset.from_arrays(inputs, outputs, input_names=..., output_names=..., ...)` | Numeric arrays with shapes `(N,P)` and `(N,T,C)` |
-| `bank.split(validation_fraction=.2, test_fraction=.2, seed=42)` | Disjoint scenario partitions; zero fractions disable optional partitions |
-| `DatasetSplit.from_datasets(train, validation=None, test=None)` | Validate supplied partitions and reject overlap |
-| `Surrogate(model="mlp", model_options=None)` | Select family and optional architecture overrides; data dimensions inferred |
-| `surrogate.fit(train, validation=None, config=TrainingConfig(...), on_progress=None)` | Fit training-only scales and weights, restore best validation weights; optional callback receives a copy of each progress record |
-| `surrogate.predict(inputs, ...)` | Original-unit deterministic prediction `(B,T,C)`; stochastic mean requires explicit `n_samples` |
-| `surrogate.sample(inputs, n_samples=100, seed=42, num_steps=50, solver="heun")` | Stochastic samples `(B,S,T,C)`; ODE settings apply to flow matching |
-| `surrogate.evaluate(bank, ...)` | `EvaluationReport` with original-unit metrics and provenance |
-| `surrogate.save(path)` / `Surrogate.load(path, device="cpu")` | Complete versioned artifact, independent of source data |
-| `surrogate.log_prob(inputs, outputs)` | iTARFlow continuous log density, original units |
-| `surrogate.log_prob_tensor(inputs, outputs)` | Differentiable iTARFlow log density |
-| `assess_coverage(training, candidates)` | Marginal range flags and distance to existing inputs |
-| `suggest_simulations(training, candidates, n=10)` | Greedy coverage suggestions over supplied candidates |
-| `load_example()` | Bundled 100-group, 40-timepoint SIRDS subset |
+| `predict(inputs, *, conditioning=None, n_samples=None, seed=0, num_steps=50, solver="heun")` | NumPy `(B,T,C)` in original units. For deterministic models, omit `n_samples`; for stochastic models explicitly supply it to request a Monte Carlo mean. |
+| `sample(inputs, n_samples=100, seed=0, num_steps=50, solver="heun", *, conditioning=None)` | NumPy `(B,S,T,C)` for stochastic models only. `num_steps` and `solver="heun"` or `"euler"` control flow-matching integration. |
+| `log_prob(inputs, outputs)` | iTARFlow only, NumPy `(B,)` continuous trajectory log density including scaling Jacobian and Gaussian constants. |
+| `log_prob_tensor(inputs, outputs)` | iTARFlow only, PyTorch `(B,)`, preserving gradients through original-unit tensors `(B,P)` and `(B,T,C)`. |
 
-`TrainingConfig` defaults: steps=500, batch_size=64, learning_rate=0.001,
-weight_decay=0.001, seed=42, device="cpu", eval_every=50, patience=None.
-The package training loop uses constant-learning-rate AdamW and optional
-validation patience. This is distinct from the historical source trainer's
-warm-up/cosine schedule. Configure and report the workflow actually used.
+`inputs` accepts a named mapping, a table with matching named columns, or an
+array `(B,P)` in fitted order. A mapping of scalars requests one setting. Named
+schemas reject missing/extra columns. Input range warnings flag extrapolation,
+not all poorly covered joint combinations. Predictions are not clipped.
 
-The public pipeline supports CPU and CUDA in float32. It does not automatically
-select precision, compile the model, run distributed training, enforce physical
-constraints or choose a model family. Advanced model classes remain importable
-from `metis.models`; historical CUDA/DDP recipes remain available in the checkout.
+For conditioned models, supply a finite original-unit array `(B,T,K)` in
+`observed_outputs` order. It is required for every call; unconditioned models
+reject it. Transformer conditions on prior observed history, while flow matching
+uses the whole supplied path. See [conditioning](conditioning.qmd).
 
-Optional tracking is available as `from metis.tracking import WandbTracker`.
-Use its context manager and pass `on_progress=tracker.log_training` to `fit`.
-The core library never requires a W&B account; tracking can also run offline.
+Generated variability represents the learned simulator distribution, not
+uncertainty in neural weights. Density evaluation is not an observation model,
+a discrete count probability or a posterior. See the [likelihood exercise](../sbi/vi-mcmc.qmd).
+
+## EvaluationReport
+
+`surrogate.evaluate(bank, n_samples=100, seed=42, num_steps=50, solver="heun",
+constraints=None, batch_size=64)` is equivalent to `metis.evaluate(surrogate, bank, ...)`.
+The bank must have the full fitted schema and grid, including observed channels.
+Evaluation supplies those channels as conditioning and scores predicted channels.
+`batch_size` bounds evaluation memory; all runs are evaluated. Stochastic
+metrics require at least two samples; changing batch size changes Monte Carlo draws.
+
+The report exposes `metrics` (aggregate dictionary), `by_output` and `by_group`
+(Polars tables), and `provenance`. `to_dict()` serializes a report;
+`save(path)` writes JSON; `worst_groups(n=10)` ranks group RMSE;
+`plot(output=None, max_runs=4)` requires the `[plots]` extra. Metrics include
+MAE/RMSE, replicate-mean error when supported, and stochastic empirical CRPS,
+pointwise 90% coverage and interval width. See [evaluation](evaluation.qmd)
+for metric definitions, partition handling and constraint syntax.
+
+## Persistence and inspection
+
+`surrogate.save(path)` writes a versioned inference artifact;
+`Surrogate.load(path, device="cpu")` returns a ready model without the bank.
+It includes schemas, times, scalers, weights, resolved architecture, bounds and
+training provenance. A training checkpoint instead includes optimizer/RNG state
+for strict resume and is configured through `TrainingConfig`. Neither loader
+silently reinterprets the other's files. See [saving and loading](../basics/saving-and-loading.qmd).
+
+Inspect `input_names`, `output_names`, `observed_outputs`, `training_output_names`,
+`times`, `history`, `training_metadata`, `resolved_model_options`, `model_config`,
+`parameter_count` and `is_stochastic`. Fitted `input_scaler`, `output_scaler`,
+and optional `conditioning_scaler` contain the means, scales and constant masks.
+`model.model` is the underlying PyTorch module for advanced use.
+
+## Other modules
+
+- `load_example()` loads the bundled 100-group, 40-timepoint SIRDS subset.
+- `assess_coverage(training, candidates)` reports marginal bounds and distance
+  to existing inputs; `suggest_simulations(training, candidates, n=10)` selects
+  a geometric coverage design from supplied valid candidates. Neither estimates
+  posterior uncertainty or guarantees low surrogate error.
+- `Standardizer.fit(array, axis=0)` uses population standard deviation;
+  `transform` and `inverse_transform` preserve units across scaling. Constant
+  dimensions have scale one and a recorded mask. New fits use float64 scaling
+  arithmetic before the float32 network.
+- `metis.preprocessing.truncate_simulations(bank, start_time=...)` and
+  `initialize_static_inputs(bank, mapping={"initial_stock": "stock"})` are
+  explicit opt-in transformations, preserving scenario/replicate identities.
+- `metis.tracking.WandbTracker` is a context manager; pass
+  `on_progress=tracker.log_training`, then `tracker.log_evaluation(report, prefix="test")`.
+  It logs supplied configuration and scalar metrics, optionally offline.
+- `metis.migration.LegacyPreprocessing` and `import_legacy_checkpoint` provide
+  a strict, inference-only import of supported historical static models when
+  their exact preprocessing is supplied. See [migration](migration.qmd).

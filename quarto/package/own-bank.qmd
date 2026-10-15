@@ -1,0 +1,73 @@
+---
+title: "A beginner handoff with a different simulation bank"
+---
+
+First run the [quickstart](quickstart.qmd). Then practice the full handoff on a
+small synthetic stock/flux bank, independent of the bundled SIRDS example.
+This checks data handling and software use; its short training run makes no
+scientific accuracy claim and is not an agent-based simulation benchmark.
+
+## Practice with a CSV
+
+Save [own_bank.py](https://github.com/OJWatson/metis/blob/main/examples/own_bank.py)
+as `own_bank.py` in your uv project. It generates 30 parameter settings, three
+replicates and 12 timepoints, with static inputs `decay` and `forcing` and
+outputs `stock` and `flux`. The toy recurrence and its noise are explicit in
+the script. No SIRDS or malaria bank is trained by this exercise.
+
+```bash
+uv run python own_bank.py --make-bank-only
+uv run metis inspect-data own-bank/bank.parquet --inputs decay forcing --outputs stock flux
+uv run python own_bank.py --csv own-bank/bank.csv --steps 100
+```
+
+The first command writes CSV and Parquet. The second validates the bank without
+training. The final command loads the CSV with Polars, validates it through
+`SimulationDataset.from_frame`, splits by input group, fits an MLP, evaluates
+held-out groups, and saves `model.pt`, `evaluation.json` and `prediction.npy`
+inside `own-bank/`. Inspect the per-output errors; successful execution alone
+does not establish that the fit is useful.
+
+Run this in a fresh Python process to check deployment:
+
+```python
+from metis import Surrogate
+model = Surrogate.load("own-bank/model.pt")
+print(model.predict({"decay": 0.2, "forcing": 0.6}).shape)  # (1, 12, 2)
+```
+
+Save it as `predict.py` and use `uv run python predict.py`. This process does
+not read the original bank.
+
+## Substitute your real bank
+
+Aggregate your agent records into trajectories first. Replace the script's
+explicit `INPUTS`/`OUTPUTS` lists with your column names; do not merely rename
+unrelated quantities. Choose consistent time and replicate identifiers, units,
+parameter groups and scientific outputs. The exercise's later standalone
+prediction snippet also needs your own parameter names and values. For an existing CSV the central step is:
+
+```python
+import polars as pl
+from metis import SimulationDataset
+frame = pl.read_csv("my_bank.csv")
+bank = SimulationDataset.from_frame(
+    frame, inputs=["contact_rate", "recovery_rate"],
+    outputs=["incidence", "prevalence"],
+)
+```
+
+Use the [data contract](data.qmd) to resolve errors. Preserve test groups while
+you tune on validation. Decide your acceptable error in original units and any
+scientific constraints before interpreting a fit. A new grid, partially observed
+records or categorical inputs requires an explicit preparation decision.
+
+## What is checked automatically
+
+The repository's `scripts/check_beginner_handoff.py` creates a new uv project,
+installs a built wheel, runs this CSV exercise and validates a fresh-process
+reload. It also runs the installed Hydra transformer with an observed channel,
+saves a training checkpoint and checks compatible resume and artifact parity. It is an automated acceptance check, **not an observed human usability
+trial**. A real new starter should also be asked to explain the input schema,
+held-out result and limits of their predictions; those scientific explanations
+cannot be inferred from a passing script.

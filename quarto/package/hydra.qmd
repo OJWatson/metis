@@ -54,7 +54,7 @@ including any other extras you already use in the same requirement. A
 multirun job that still uses `evaluation.partition=test` emits a warning: it does
 not automatically change the partition or conceal evaluation choices.
 
-## Live Weights & Biases tracking
+## Live Weights & Biases tracking {#live-tracking}
 
 Tracking is optional and off by default. Install the `[wandb]` extra to stream
 training loss at every optimizer step, validation loss when evaluated, and final
@@ -115,11 +115,17 @@ a no-op and does not import or require W&B. A custom `on_progress` callback can
 instead update a dashboard or another logger; it receives a copied dictionary
 with `step`, `train_loss` and, on validation steps, `validation_loss`.
 
-## Existing source recipes
+## Training options and migration
 
-The original `train.py` and configs remain available for advanced CUDA/DDP and
-sequence-conditioning experiments with `[legacy]` installed. New experiments
-using static inputs should use `uv run metis train` so Python and Hydra share portable
-artifacts and scientific diagnostics. Historical checkpoints cannot be loaded
-by `Surrogate.load`; their normalization was not bundled. Preserve the original
-bank when using those old checkpoints.
+`training.*` exposes the same `TrainingConfig` fields as Python, including
+`schedule=warmup_cosine`, `precision=bf16`, `compile_model=true`, `num_devices`,
+checkpoint cadence and strict resume. Use [training](../basics/training.qmd),
+[distributed training](../utils/distributed-training.qmd) and
+[saving/resuming](../basics/saving-and-loading.qmd) for examples and constraints.
+
+Transformer and flow matching accept `model.observed_outputs=[column,...]` for
+[sequence conditioning](conditioning.qmd). Keep those columns in `dataset.outputs`.
+
+Older root scripts/configs are retired. The [migration guide](migration.qmd)
+explains replacement fields and why historical weights need their original
+preprocessing implementation as well as the original simulation bank.

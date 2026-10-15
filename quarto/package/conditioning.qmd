@@ -1,0 +1,68 @@
+---
+title: "Condition on an observed trajectory"
+---
+
+A static input is one value per realization. An observed sequence is a value
+per timepoint known at prediction time, such as a prescribed intervention or
+an externally supplied environmental trajectory. Do not put a changing sequence
+in the static-input columns.
+
+## Bank and model schema
+
+Keep both observed and predicted channels in the bank's output schema, then
+name the observed channels when constructing the model:
+
+```python
+from metis import SimulationDataset, Surrogate, TrainingConfig
+bank = SimulationDataset.from_parquet(
+    "conditioned_bank.parquet", inputs=["contact_rate"],
+    outputs=["intervention", "incidence"],
+)
+split = bank.split(seed=42)
+model = Surrogate("transformer", observed_outputs=["intervention"]).fit(
+    split.train, split.validation, config=TrainingConfig(steps=500),
+)
+```
+
+The bank still needs complete, aligned time grids and disjoint scenario groups.
+The model learns to predict the remaining channels. In the example its output
+is `incidence`; `intervention` is supplied, not generated. MLP and iTARFlow do
+not support observed-sequence conditioning.
+
+## Prediction and sampling
+
+```python
+prediction = model.predict(
+    {"contact_rate": 0.4}, conditioning=known_intervention,
+)
+```
+
+`known_intervention` has shape `(input settings, fitted timepoints, observed
+channels)`, here `(1, T, 1)`, in original units. Its channel order follows the
+`observed_outputs` declaration. Prediction returns `(B,T,C_predicted)`.
+For `Surrogate("flow_matching", observed_outputs=[...])`, use
+`sample(inputs, conditioning=known_sequence, n_samples=100, seed=42)` to obtain
+`(B,S,T,C_predicted)`. The portable artifact preserves the conditioning schema
+and scaling. Missing or incompatible shapes fail validation; an array cannot reveal
+a mistaken channel order, so preserve the declared order yourself.
+
+Hydra uses the same constructor:
+
+```bash
+uv run metis train dataset=parquet dataset.path=conditioned_bank.parquet 'dataset.inputs=[contact_rate]' 'dataset.outputs=[intervention,incidence]' model=transformer 'model.observed_outputs=[intervention]'
+```
+
+## Information available at prediction time
+
+The autoregressive transformer uses causal attention. Flow matching processes
+a full trajectory jointly, and its outputs can depend on the supplied sequence
+as a whole. It is suitable for generation conditional on a known full path;
+do not present this as forecasting based only on observations available so far.
+Always define which quantities are known in the intended application. Held-out
+evaluation cannot repair conditioning information that would be unavailable
+when the model is deployed.
+
+`model.evaluate(test_bank)` takes the same full output schema used during fit.
+It extracts observed channels from each held-out run and scores only predicted
+channels. The test claim is conditional performance given that supplied path;
+it is not performance when that path is unknown.

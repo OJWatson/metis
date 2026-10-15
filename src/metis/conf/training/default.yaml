@@ -1,4 +1,5 @@
 _target_: metis.TrainingConfig
+_convert_: all
 steps: 500
 batch_size: 64
 learning_rate: 0.001
@@ -7,3 +8,14 @@ seed: 42
 device: cpu
 eval_every: 50
 patience: null
+schedule: constant
+warmup_fraction: 0.2
+min_learning_rate: 0.000001
+precision: fp32
+compile_model: false
+deterministic: false
+num_devices: 1
+checkpoint_every: null
+checkpoint_dir: null
+resume_from: null
+optimizer_betas: null

@@ -78,3 +78,18 @@ Also inspect `worst_groups()` for measured error patterns. More coverage, more
 replicates, a different architecture and better optimization solve different
 problems. Once you adapt using test errors, obtain a fresh independent test bank
 before claiming final performance.
+
+## Conditioned models
+
+For observed-sequence models, evaluation banks include both observed and
+predicted channels in the original fitted order. METIS supplies observed channels
+to each prediction and computes metrics for predicted channels only. Report
+which path was supplied, and whether it would be known in deployment. In
+particular, flow matching can use the complete path; that evaluation is not a
+causal forecasting test. See [conditioning](conditioning.qmd).
+
+Reports record both the evaluation batch size and the model's internal inference
+batch size/device. Changing either batch size can change seeded Monte Carlo
+draws; retain these settings when reproducing sampled diagnostics. Legacy imports
+record their inference batch setting separately from unknown historical training
+settings.

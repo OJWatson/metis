@@ -6,7 +6,7 @@ Before training a surrogate, you need a dataset of simulator inputs (parameters)
 paired with outputs (realisations).
 
 ::: {.callout-tip}
-This walkthrough uses Python to prepare the data and expects that you have packages like matplotlib, pandas and numpy installed. 
+This walkthrough uses Python to prepare the data and expects that you have packages like matplotlib, pandas and numpy installed.
 However, you can use any language or packages you're comfortable with.
 :::
 <!-- ::: {.callout-note}
@@ -49,57 +49,22 @@ import numpy as np
 import pandas as pd
 
 
-def simulate_sirds(
-    I0=0.005, beta=0.4, gamma=0.1, omega=0.02, mu=0.01, T=365, dt=1.0, N=1000, seed=None
-):
-    rng = np.random.default_rng(seed)
-    n = int(T / dt) + 1
-    I0_count = max(0, min(N, int(round(I0 * N))))
-
-    S = np.zeros(n, dtype=np.int32)
-    I = np.zeros(n, dtype=np.int32)
-    R = np.zeros(n, dtype=np.int32)
-    D = np.zeros(n, dtype=np.int32)
-    S[0], I[0], R[0], D[0] = N - I0_count, I0_count, 0, 0
-
-    for k in range(n - 1):
-        p_inf = 1.0 - np.exp(-beta * I[k] / N * dt)
-        p_rec = 1.0 - np.exp(-gamma * dt)
-        p_die = 1.0 - np.exp(-mu * dt)
-        p_sus = 1.0 - np.exp(-omega * dt)
-
-        new_I = rng.binomial(S[k], p_inf)
-
-        # Competing risks: each infected individual can recover, die, or stay infected.
-        # Use a multinomial draw so recovery + death never exceeds I[k].
-        p_stay = max(0.0, 1.0 - p_rec - p_die)
-        outcomes = rng.multinomial(I[k], [p_rec, p_die, p_stay])
-        new_R = outcomes[0]
-        new_D = outcomes[1]
-
-        new_S = rng.binomial(R[k], p_sus)
-
-        S[k + 1] = S[k] - new_I + new_S
-        I[k + 1] = I[k] + new_I - new_R - new_D
-        R[k + 1] = R[k] + new_R - new_S
-        D[k + 1] = D[k] + new_D
-
-    return S, I, R, D
+from metis.datasets.sirds import simulate_sirds
 ```
 
 ```{python}
 # the simulator inputs
 params = dict(I0=0.005, beta=0.4, gamma=0.1, omega=0.02, mu=0.01)
 
-# number of realisations we would like 
+# number of realisations we would like
 n_reps = 5
- 
+
 frames = []
 for rep in range(n_reps):
-    
+
     S, I, R, D = simulate_sirds(seed=rep, **params, T=100)
-    S,I,R,D=S[1:],I[1:],R[1:], D[1:] # we drop t=0 since for this simulator it carries no information
-    t = np.arange(len(S))
+    S,I,R,D=S[1:],I[1:],R[1:], D[1:] # this example explicitly omits the known initial state
+    t = np.arange(1, len(S) + 1)
     frames.append(pd.DataFrame({
         "rep": rep,
         "t": t,
@@ -130,7 +95,7 @@ When building a dataset of simulator realisations its important to consider whic
 ```{python}
 import seaborn as sns
 
-N_PARAMS = 1_000
+N_PARAMS = 100  # Small documentation exercise; choose a design for actual research.
 
 # reproducible parameter sampling
 param_rng = np.random.default_rng(42)
@@ -155,7 +120,7 @@ import time
 N_REPS = 5
 T, DT = 200, 1.0
 n_steps_sim = int(T / DT) + 1  # simulator produces this many steps including t=0
-n_steps = n_steps_sim - 1  # we drop t=0 since it carries no information
+n_steps = n_steps_sim - 1  # this example explicitly omits the known initial state
 total_rows = N_PARAMS * N_REPS * n_steps
 
 
@@ -223,9 +188,15 @@ df = pd.DataFrame(
 df
 ```
 
-And thats it as far as data preparation is concerned! To actually save this dataframe as a parquet file simply use 
+And thats it as far as data preparation is concerned! To actually save this dataframe as a parquet file simply use
 
 ```python
 df.to_parquet( "sirds_data.parquet", index=False, compression="snappy")
 ```
-Next we'll look at how Hydra works, and writing a dataset config file.
+Validate the resulting bank before training:
+
+```bash
+uv run metis inspect-data sirds_data.parquet --inputs I_0 beta gamma omega mu --outputs I_t S_t R_t D_t
+```
+Then use the [installed Hydra workflow](../package/hydra.qmd). The smaller
+[own-bank exercise](../package/own-bank.qmd) is the recommended first handoff.

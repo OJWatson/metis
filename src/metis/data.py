@@ -438,14 +438,30 @@ class Standardizer:
     mean: np.ndarray
     scale: np.ndarray
     constant_mask: np.ndarray
+    arithmetic_dtype: str = "float64"
 
     def __post_init__(self) -> None:
+        if self.arithmetic_dtype not in ("float32", "float64"):
+            raise ValueError(
+                "Standardizer arithmetic_dtype must be float32 or float64."
+            )
         mean = _numeric_array(self.mean, "mean", dtype=np.float64)
         scale = _numeric_array(self.scale, "scale", dtype=np.float64)
         mask = np.asarray(self.constant_mask, dtype=bool).copy()
         if mean.shape != scale.shape or mean.shape != mask.shape or np.any(scale <= 0):
             raise ValueError(
                 "Standardizer mean, scale and mask must have matching shapes and positive scales."
+            )
+        with np.errstate(over="ignore", under="ignore"):
+            arithmetic_mean = mean.astype(self.arithmetic_dtype)
+            arithmetic_scale = scale.astype(self.arithmetic_dtype)
+        if (
+            not np.isfinite(arithmetic_mean).all()
+            or not np.isfinite(arithmetic_scale).all()
+            or np.any(arithmetic_scale <= 0)
+        ):
+            raise ValueError(
+                "Standardizer statistics must remain finite with positive scales in arithmetic_dtype."
             )
         for name, value in (("mean", mean), ("scale", scale), ("constant_mask", mask)):
             value.setflags(write=False)
@@ -464,7 +480,7 @@ class Standardizer:
         return cls(mean, np.where(constant, 1.0, scale), constant)
 
     def _checked(self, array: Any) -> np.ndarray:
-        values = _numeric_array(array, "Values", dtype=np.float64)
+        values = _numeric_array(array, "Values", dtype=np.dtype(self.arithmetic_dtype))
         trailing_shape = values.shape[-self.mean.ndim :] if self.mean.ndim else ()
         if trailing_shape != self.mean.shape:
             raise ValueError(
@@ -473,15 +489,19 @@ class Standardizer:
         return values
 
     def transform(self, array: Any) -> np.ndarray:
+        mean = self.mean.astype(self.arithmetic_dtype)
+        scale = self.scale.astype(self.arithmetic_dtype)
         return _numeric_array(
-            (self._checked(array) - self.mean) / self.scale,
+            (self._checked(array) - mean) / scale,
             "Standardized values",
             dtype=np.float32,
         )
 
     def inverse_transform(self, array: Any) -> np.ndarray:
+        mean = self.mean.astype(self.arithmetic_dtype)
+        scale = self.scale.astype(self.arithmetic_dtype)
         return _numeric_array(
-            self._checked(array) * self.scale + self.mean,
+            self._checked(array) * scale + mean,
             "Inverse transformed values",
             dtype=np.float32,
         )
@@ -491,6 +511,7 @@ class Standardizer:
             "mean": self.mean.tolist(),
             "scale": self.scale.tolist(),
             "constant_mask": self.constant_mask.tolist(),
+            "arithmetic_dtype": self.arithmetic_dtype,
         }
 
     @classmethod
@@ -499,4 +520,5 @@ class Standardizer:
             np.asarray(values["mean"]),
             np.asarray(values["scale"]),
             np.asarray(values["constant_mask"]),
+            arithmetic_dtype=values.get("arithmetic_dtype", "float64"),
         )

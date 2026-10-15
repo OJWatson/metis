@@ -19,7 +19,14 @@ For an overview of the surrogate modelling process and a reporting standard for 
 
 ## Introducing METIS
 
-METIS is a set of configurable recipes for training neural surrogates of time series simulators. METIS implements several neural network architectures and algorithms and is designed so that practictioners can easily train and sweep over different combinations purely through simple config files and comandline overrrides. Using METIS to develop surrogates for existing simulators simply requires preparing data in the correct format and supplying appropriate config files.
+METIS is an installable Python library for neural surrogates of time-series
+simulators, with equivalent Python and Hydra entry points. Prepare a validated
+bank, select a model and training settings, inspect held-out predictions, then
+save the model for reuse. Hydra records configuration and supports command-line
+overrides and sweeps. The package supplies engineering checks and common
+diagnostics; defining valid inputs, scientific outcomes and acceptable errors
+remains part of the modelling work. Start with the
+[quickstart](../package/quickstart.qmd) and [own-bank exercise](../package/own-bank.qmd).
 
 <!-- TODO: position METIS.
 

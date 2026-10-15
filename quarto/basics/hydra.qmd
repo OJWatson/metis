@@ -1,141 +1,67 @@
 ---
-title: "Hydra crash course"
+title: "Understand Hydra configuration"
 ---
 
-METIS is configured end-to-end with the [Hydra](https://hydra.cc). You don't need
-to touch Python to change models, datasets or training settings — you compose
-and override Hydra configs instead.
+A configuration records the decisions that would otherwise be arguments in a
+Python script: the dataset, model architecture, training options and evaluation.
+Hydra combines named configurations and applies command-line overrides. METIS
+ships those configurations inside the installed package; no source checkout or
+editing of library files is required.
 
-## Hydra basics
-Hydra's configuration files are simple text-based [YAML](https://yaml.org/about/) files. For example a basic training config might look like this:
-
-```yaml
-data: malaria_data
-model: transformer
-steps: 10000
-```
-Once ingested into a Python program (omitted here) the config's values can be accessed like any object:
-
-```python
-print(config.steps) #should print 10000
-```
-
-Importantly, an entry's value doesn't have to just be a string or a number, it can refer to *another* configuration file. For example, we could create a configuration file for each dataset that stores where the data lives and other metadata like the column names.
-
-```text
-├── configs/
-│   ├── config.yaml
-│   ├── data
-│       ├── malaria_data.yaml
-│       └── ebola_data.yaml
-│   
-└── my_program.py
-```
-
-Then `malaria_data.yaml` might contain something like
-
-```yaml
-data_path: datasets/malaria_simulations.parquet
-column_names:
- - a
- - b
- - c
-```
-
-Then to get Hydra to use this config instead of a string we use the `defaults` list directive:
-
-```yaml
-defaults:
-  data: malaria_data
-
-model: transformer
-steps: 10000
-```
-`defaults` is a special directive telling Hydra to use `data/malaria_data.yaml` when composing the configuration object. The resulting object is a composition of configs from defaults with configs specified in your `config.yaml`.
-
-Furthermore, when running our program in the commandline, we can override configs or values without modifying the config file itself:
+## Inspect before changing
 
 ```bash
-uv run python my_program.py --config-name config data=ebola_data steps=5000
+uv run metis train --cfg job
+uv run metis train --help
 ```
 
-Finally, overrides can happen inside configs themselves, for example, a particular training run might fetch the data from a different location but still have the same column names as the default `malaria_data.yaml`:
+The first command prints the fully composed job without training. The second
+lists configuration groups. `model=transformer` selects a different model group;
+`training.steps=1000` changes one value in the training configuration.
+
+```bash
+uv run metis train model=transformer training.steps=1000 model.model_options.n_embd=128
+```
+
+The model configuration has this structure:
 
 ```yaml
-defaults:
-  - data: malaria_data #start off with the usual values in malaria_data.yaml
-  - _self_ #apply overrides in this config last 
-
-data:
-  data_path: new_location #override the data config's data_path
-model: transformer
-steps: 10000
+_target_: metis.Surrogate
+_convert_: all
+model: mlp
+observed_outputs: []
+model_options:
+  hidden_dim: 64
+  num_blocks: 2
+  num_layers_per_block: 2
 ```
 
-These core features allow us to keep our configuration files nicely structured and make it quick to try different models or datasets.
+`_target_` identifies the Python constructor; `_convert_: all` gives it ordinary
+Python containers. This is equivalent to constructing `Surrogate("mlp",
+model_options={...})`. Width/depth are architecture settings; dimensions derived
+from the bank are deliberately not user overrides.
 
-:::{.callout-tip}
-Hydra has many more features not mentioned here. If you ever get stuck or feel a bit lost the [Hydra tutorials](https://hydra.cc/docs/tutorials/intro/) are excellent and most LLMs are helpful when writing or editing Hydra configs.
-:::
+## Your own data and runs
 
-<!-- TODO: minimal mental model — config groups, composition, defaults list,
-command-line overrides. -->
-
-
-
-## Writing a config for our data
-
-::: {style="text-align: center; transform: scale(1.2); transform-origin: top center; margin-bottom: 4em;"}
-```{mermaid}
-%%| echo: false
-graph TD
-    A[Dataset Config] --> D[Train Config]
-    B[Model Config] --> D
-    style A fill:#4a90d9,color:#fff,stroke:none
-    style B fill:#7b61ff,color:#fff,stroke:none
-    style D fill:#e06c75,color:#fff,stroke:none
+```bash
+uv run metis train dataset=parquet dataset.path=/absolute/path/bank.parquet 'dataset.inputs=[contact_rate,recovery_rate]' 'dataset.outputs=[incidence,prevalence]' training.steps=1000
 ```
-:::
 
-The config system in Metis is quite similar to the examples we had above, a train config is composed out of a model config and a dataset config. For a quickstart we'll just focus on the dataset config since we can simply override existing training configs to use it.
+Quote list expressions so the shell does not interpret brackets. Relative paths
+resolve from the launch directory. See [data preparation](../package/data.qmd)
+for column contracts and [the own-bank exercise](../package/own-bank.qmd) for CSV.
+The `--multirun` flag expands comma-separated choices into independent jobs:
 
-Here's the completed config for our example SIRDS dataset. It's fairly self-explanatory, `surrogate_input_variables` are *static* input values that we'd like our surrogate to condition on and `output_variables` are what we'd like the surrogate to predict. `grouping_variables` are used to group `reps` together, for most use-cases `grouping_variables` should be the same as the `surrogate_inputs`, but for some datasets this flexibility is needed.
-
-
-```yaml
-surrogate_input_variables:
-  - I_0
-  - beta
-  - gamma
-  - omega
-  - mu
-
-grouping_variables:
-  - I_0
-  - beta
-  - gamma
-  - omega
-  - mu 
-
-output_variables:
-  - S_t
-  - I_t
-  - R_t
-  - D_t
-
-num_timesteps: 200
-path: examples/sirds_data.parquet
-reps_for_comparison_plot: 5
-
-# advanced options we'll ignore for now
-trunc_until: null
-input_col_to_source_col: null
-observed_output_variables: null
-exclude_output_variables: null
+```bash
+uv run metis train --multirun model=mlp,transformer training.learning_rate=0.001,0.0003 evaluation.partition=validation
 ```
-Save this config as `sirds.yaml` in `configs/dataset`, we'll need it for a tutorial on training.
 
+Each job saves its resolved settings with its artifacts. Use validation to select
+a run, then assess the selected model on the withheld test bank. `+key=value`
+adds a new Hydra key; use it only for a real optional field accepted by its
+constructor, not to bypass an unrecognized architecture option.
 
-:::{.callout-important}
-Later on we'll explore some of the other options, including conditioning on inputs that vary in time.
-:::
+The [experiment guide](../package/hydra.qmd) covers W&B and custom dataset
+factories. More composition details are in the [Hydra tutorials](https://hydra.cc/docs/tutorials/intro/).
+The [migration guide](../package/migration.qmd) maps historical configurations
+to the installed workflow.

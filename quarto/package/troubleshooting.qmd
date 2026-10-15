@@ -11,9 +11,13 @@ title: "Troubleshooting and model choice"
 | Good transformer training loss, poor predictions | Inspect autonomous rollouts. Teacher-forced next-step loss can hide accumulating prediction errors. |
 | Good average, missing stochastic variability | A deterministic model cannot generate a conditional distribution. Compare flow matching or iTARFlow on distributional metrics. |
 | Negative counts or broken conservation | Inspect violation reports. The models do not enforce these rules. A support-aware model or transformation is a separate scientific decision. |
-| CUDA unavailable | Use the CPU package API or install compatible PyTorch/drivers. The legacy source trainer requires CUDA. |
+| CUDA unavailable | Use `device="cpu"` or choose a compatible CUDA PyTorch index and driver using the quickstart. An installed CUDA wheel alone does not guarantee a usable GPU. |
 | Out of memory | Reduce batch size, width, sequence length or sample batch size as appropriate. The bank still needs RAM even though training uses device minibatches. |
 | Reloaded predictions differ | Use the complete artifact, same sampling seed and numerical settings. Old raw checkpoints lack preprocessing. |
+| Conditioning is missing or shape is wrong | Supply `(B,T,K)` original-unit values in `observed_outputs` order; do not pass changing data as static inputs. Evaluation banks need the full original output schema. |
+| Resume reports a mismatch | Reuse the exact bank, split, architecture, scaling, total steps and numerical/topology settings. A changed experiment starts a new fit; an inference artifact is not an optimizer checkpoint. |
+| Precision or compilation fails | Recheck hardware support; try `precision=fp32` and `compile_model=false`. TF32 needs CUDA; compile and deterministic modes cannot be combined. Record the numerical mode actually used. |
+| Multiprocess startup fails | Guard Python script entry with `if __name__ == "__main__":`; ensure global batch size divides the worker count and requested CUDA devices exist. |
 | Inference looks overconfident | Check identifiability, observation assumptions, surrogate fidelity and posterior predictive calibration. More flow samples do not measure surrogate-error uncertainty. |
 
 Start with an MLP and a train-mean baseline. Use a transformer if sequential
@@ -23,5 +27,5 @@ and the continuous support assumptions are defensible.
 
 Presets are starting configurations, not automatic recommendations. Learning
 rate, data coverage, sample budget and the scientific target can matter more
-than the model family. The original architecture pages give more detail; the
-new package evaluation workflow provides common diagnostics.
+than the model family. The architecture pages give more detail; the package evaluation workflow
+provides common diagnostics.

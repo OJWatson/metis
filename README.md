@@ -47,8 +47,7 @@ uv add "metis-surrogate[plots,pandas,wandb] @ git+https://github.com/OJWatson/me
 ```
 
 Use only the extras you need: `[plots]` for figures, `[pandas]` for pandas tables,
-`[wandb]` for tracking, `[docs]` for notebooks, or `[legacy]` for the historical
-CUDA trainer. Because these extras are project dependencies, subsequent
+`[wandb]` for tracking or `[docs]` for notebooks. Because these extras are project dependencies, subsequent
 `uv run` commands retain them.
 
 ## A complete Python workflow
@@ -104,12 +103,13 @@ can use `metis.tracking.WandbTracker` with the same training progress callback.
 Tracking logs configuration and scalar metrics; it does not upload simulation
 tables or model files automatically.
 
-The old `uv run --locked --all-extras python train.py --config-name default ...`
-workflow remains available from the checkout after the setup in
-[CONTRIBUTING.md](CONTRIBUTING.md). It exposes advanced CUDA/DDP and
-sequence-conditioning settings. Its historical checkpoint format differs from
-the new portable artifacts; use the new entry points for ordinary static-input
-training and deployment.
+The same training engine supports CPU/CUDA, optional BF16 or TF32, compilation,
+multiple devices, warm-up/cosine learning rates and resumable optimizer checkpoints.
+Defaults stay CPU, float32, one device and constant learning rate. See
+[training](https://ojwatson.github.io/metis/basics/training.html) and the
+[migration guide](https://ojwatson.github.io/metis/package/migration.html) for
+changed defaults and historical checkpoints. Hardware support needs validation
+on the specific GPU and driver you intend to use.
 
 ## Your simulation bank
 
@@ -125,12 +125,23 @@ remain identifiable through the scaler's constant mask. For pre-split banks,
 `DatasetSplit.from_datasets(train, validation, test)` checks compatibility and
 rejects overlapping scenarios.
 
+Validate a prepared bank before training:
+
+```bash
+uv run metis inspect-data simulations.parquet --inputs contact_rate recovery_rate --outputs incidence prevalence
+```
+
+For a new starter, follow the [own-bank exercise](https://ojwatson.github.io/metis/package/own-bank.html):
+it creates a small CSV bank, validates it, trains a model, evaluates held-out
+scenarios and reloads the artifact in another process. The exercise explains how
+to replace the toy columns with an actual ABM bank.
+
 ## Which model?
 
 | Family | Prediction | Typical purpose |
 |---|---|---|
 | `mlp` | Deterministic whole trajectory | Begin with a simple mean-prediction baseline |
-| `transformer` | Deterministic autoregressive rollout | Sequential prediction; advanced sequence conditioning |
+| `transformer` | Deterministic autoregressive rollout | Sequential prediction with optional observed history |
 | `flow_matching` | Stochastic trajectories | Reproduce simulator variability |
 | `itarflow` | Stochastic trajectories and continuous density | Approximate-likelihood applications |
 
@@ -139,8 +150,11 @@ shape `(inputs, samples, time, outputs)`. An explicit
 `surrogate.predict(inputs, n_samples=100)` returns a Monte Carlo mean.
 `itarflow` also provides `log_prob` and differentiable `log_prob_tensor` in
 original units. This is the learned surrogate's density, not the exact simulator
-likelihood. The high-level API currently accepts static inputs; complete-sequence
-conditioning remains in `metis.models` and the advanced trainer.
+likelihood. Transformer and flow matching also accept named observed sequences:
+select `observed_outputs=["intervention"]` from the bank's output schema and supply
+`conditioning=` at prediction time. Transformer conditioning uses prior history;
+flow matching conditions on the complete supplied path. See
+[sequence conditioning](https://ojwatson.github.io/metis/package/conditioning.html).
 
 ## Check fidelity and decide where to simulate
 

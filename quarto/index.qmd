@@ -28,9 +28,11 @@ transformer) and stochastic trajectories (flow matching and normalising flow).
 An evaluable flow density can support approximate-likelihood fitting.
 Generated variability is not uncertainty about surrogate accuracy.
 
-CPU training works by default. CUDA is optional in the package API; the
-historical advanced source trainer supports CUDA/DDP and sequence conditioning.
-The new high-level API currently targets static inputs and fixed time grids.
+CPU training works by default. The shared engine also provides optional CUDA,
+multiple devices, precision settings and strict checkpoint resume. Transformer
+and flow matching support [observed sequence conditioning](package/conditioning.qmd).
+All public models use the fitted fixed time grid. See [training](basics/training.qmd)
+for settings and hardware validation limits.
 
 ## Installation
 
@@ -64,7 +66,7 @@ PyPI `metis` package is unrelated.
 
 ## Development and provenance
 
-The original model implementations, diagrams and advanced recipes are retained
-in the background sections. The package workflow is the recommended starting
+The original model implementations, diagrams and scientific explanations remain
+in the background sections, with current installed-package recipes. The package workflow is the recommended starting
 point for a new researcher. The repository is MIT licensed, with attribution
 and third-party notices preserved.

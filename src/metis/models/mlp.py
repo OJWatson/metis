@@ -45,7 +45,7 @@ class ResidualBlock(nn.Module):
                     config,
                     activation_fn=F.relu
                     if i < (config.num_layers_per_block) - 1
-                    else lambda x: x,  # No activation on last layer in block
+                    else nn.Identity(),  # Picklable for spawned training workers.
                 )
                 for i in range(config.num_layers_per_block)
             ]
