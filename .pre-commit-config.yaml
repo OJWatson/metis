@@ -3,13 +3,13 @@ repos:
     hooks:
       - id: ruff
         name: ruff correctness checks
-        entry: uv run ruff check
+        entry: uv run --locked --all-extras ruff check
         language: system
         types: [python]
         files: ^(src/|tests/)
       - id: pytest
         name: pytest
-        entry: uv run --extra legacy pytest
+        entry: uv run --locked --all-extras pytest
         language: system
         types: [python]
         pass_filenames: false

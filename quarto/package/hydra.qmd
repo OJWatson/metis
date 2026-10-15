@@ -10,19 +10,22 @@ workflows.
 ## Packaged configurations
 
 ```bash
-metis train --cfg job
-metis train model=mlp training.steps=1000
-metis-train model=flow_matching training.device=cuda training.batch_size=128
+uv run metis train --cfg job
+uv run metis train model=mlp training.steps=1000
+uv run metis-train model=flow_matching training.device=cpu training.batch_size=128
 ```
 
-Configurations are included in the wheel. Commands work outside the repository.
+Run these commands from the uv project created in the
+[quickstart](quickstart.qmd). Configurations are included in the wheel, so the
+project can live outside the METIS repository. Use `training.device=cuda` after
+the quickstart's CUDA setup to select an NVIDIA GPU.
 Model groups are `mlp`, `transformer`, `flow_matching` and `itarflow`. The default
 dataset is the bundled example. Dimensions are inferred from its schema.
 
 For your data:
 
 ```bash
-metis train dataset=parquet dataset.path=/absolute/path/bank.parquet 'dataset.inputs=[contact_rate,recovery_rate]' 'dataset.outputs=[incidence,prevalence]'
+uv run metis train dataset=parquet dataset.path=/absolute/path/bank.parquet 'dataset.inputs=[contact_rate,recovery_rate]' 'dataset.outputs=[incidence,prevalence]'
 ```
 
 A dataset factory can also return a `DatasetSplit` for explicitly prepared
@@ -34,7 +37,7 @@ Parquet paths are resolved from the launch directory, even with
 ## Sweeps
 
 ```bash
-metis train --multirun model=mlp,transformer training.learning_rate=0.001,0.0003 evaluation.partition=validation
+uv run metis train --multirun model=mlp,transformer training.learning_rate=0.001,0.0003 evaluation.partition=validation
 ```
 
 Each run writes its resolved configuration, complete model, training history and
@@ -44,7 +47,10 @@ unrelated training losses. After choosing the model/settings, assess the
 independent test bank once. Using test metrics to select a sweep winner would
 make those results tuning performance rather than a final test.
 
-Set `plot.enabled=true` with the `[plots]` extra for a diagnostic figure. A
+Set `plot.enabled=true` with the `[plots]` extra for a diagnostic figure. Add it
+to your project with
+`uv add "metis-surrogate[plots] @ git+https://github.com/OJWatson/metis.git"`,
+including any other extras you already use in the same requirement. A
 multirun job that still uses `evaluation.partition=test` emits a warning: it does
 not automatically change the partition or conceal evaluation choices.
 
@@ -55,16 +61,20 @@ training loss at every optimizer step, validation loss when evaluated, and final
 evaluation metrics. Hydra and Python use the same progress callback.
 
 ```bash
-python -m pip install "metis-surrogate[wandb] @ git+https://github.com/OJWatson/metis.git"
+uv add "metis-surrogate[wandb] @ git+https://github.com/OJWatson/metis.git"
 # Local tracking; no account, credentials, or network required:
-metis train training.steps=100 wandb.enabled=true wandb.mode=offline
+uv run metis train training.steps=100 wandb.enabled=true wandb.mode=offline
 ```
 
-For an online run, authenticate with `wandb login`, then select the project and,
+If you also use plots or pandas tables, include those extras in the requirement,
+for example `[plots,pandas,wandb]`. uv records the selection, so tracking remains
+available on subsequent `uv run` calls.
+
+For an online run, authenticate with `uv run wandb login`, then select the project and,
 if appropriate, your user or team entity:
 
 ```bash
-metis train wandb.enabled=true wandb.project=my-surrogate-study wandb.entity=my-team
+uv run metis train wandb.enabled=true wandb.project=my-surrogate-study wandb.entity=my-team
 ```
 
 Do not put credentials in YAML or commit them to the repository. W&B manages
@@ -109,7 +119,7 @@ with `step`, `train_loss` and, on validation steps, `validation_loss`.
 
 The original `train.py` and configs remain available for advanced CUDA/DDP and
 sequence-conditioning experiments with `[legacy]` installed. New experiments
-using static inputs should use `metis train` so Python and Hydra share portable
+using static inputs should use `uv run metis train` so Python and Hydra share portable
 artifacts and scientific diagnostics. Historical checkpoints cannot be loaded
 by `Surrogate.load`; their normalization was not bundled. Preserve the original
 bank when using those old checkpoints.

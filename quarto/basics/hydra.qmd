@@ -56,7 +56,7 @@ steps: 10000
 Furthermore, when running our program in the commandline, we can override configs or values without modifying the config file itself:
 
 ```bash
-uv run my_program --config-name config data=ebola_data steps=5000
+uv run python my_program.py --config-name config data=ebola_data steps=5000
 ```
 
 Finally, overrides can happen inside configs themselves, for example, a particular training run might fetch the data from a different location but still have the same column names as the default `malaria_data.yaml`:

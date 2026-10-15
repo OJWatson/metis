@@ -47,6 +47,18 @@ markers = ["slow: marks longer numerical tests"]
 [dependency-groups]
 dev = ["build>=1.2", "pytest>=8.3", "pre-commit>=4", "ruff==0.14.0", "ty==0.0.46"]
 
+# Keep the development environment usable on a CPU-only workstation.
+# Consumers select their own PyTorch source in their research project's config.
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.ruff]
 target-version = "py311"
 line-length = 88

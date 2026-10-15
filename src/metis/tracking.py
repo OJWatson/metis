@@ -73,7 +73,8 @@ class WandbTracker:
             import wandb
         except ImportError as exc:
             raise ImportError(
-                "W&B logging requires: pip install 'metis-surrogate[wandb]'. "
+                "W&B logging requires: uv add "
+                "'metis-surrogate[wandb] @ git+https://github.com/OJWatson/metis.git'. "
                 "Use enabled=False to train without W&B."
             ) from exc
         if self._options["dir"] is not None:

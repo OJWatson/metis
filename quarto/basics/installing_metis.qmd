@@ -3,9 +3,9 @@ title: "Install the advanced source workflow"
 ---
 
 ::: {.callout-note}
-For ordinary Python use or the installed `metis train` Hydra interface, start
+For ordinary Python use or the installed `uv run metis train` Hydra interface, start
 with the [package quickstart](../package/quickstart.qmd). That workflow supports
-CPU training and saves portable artifacts. Both pip and uv are supported.
+CPU training and saves portable artifacts in a uv-managed project.
 
 This page covers the historical `train.py` workflow in a source checkout. It
 exposes advanced CUDA/DDP and sequence-conditioning settings, requires a
@@ -20,42 +20,44 @@ Install [uv](https://docs.astral.sh/uv/) and Git, then run:
 ```bash
 git clone https://github.com/OJWatson/metis.git
 cd metis
-uv sync --extra legacy
+uv sync --locked --all-extras
 ```
 
-The `legacy` extra supplies the historical trainer's plotting, terminal and
-Weights & Biases dependencies. Base-package installation alone does not supply
-them. Check that your PyTorch build and GPU driver are compatible before using
-this trainer; installing dependencies does not configure GPU drivers.
+This includes the development tools and all optional dependencies, including
+the historical trainer's plotting, terminal and Weights & Biases dependencies.
+uv creates `.venv` using the versions in `uv.lock`; you do not need to activate
+it. Base-package installation alone does not supply the historical dependencies.
 
-Keep the extra explicit when running historical recipes:
+The checkout defaults to CPU PyTorch on Linux and Windows and a PyPI platform
+build on Apple Silicon macOS; Intel Macs are unsupported by the current PyTorch
+dependency range. **The historical trainer requires an NVIDIA GPU and CUDA
+PyTorch.** Before running it, use the
+[CUDA named-index setup](../package/quickstart.qmd#optional-cuda-setup) to change
+your local torch source and lockfile to suit your driver. Then synchronize the
+checkout again with `uv sync --locked --all-extras`. Installing Python
+dependencies does not configure GPU drivers or establish GPU compatibility.
+
+Keep all extras explicit when running historical recipes:
 
 ```bash
-uv run --extra legacy train.py --config-name default
+uv run --locked --all-extras python train.py --config-name default
 ```
 
-For the Python dependencies used by the historical notebooks and documentation,
-include the `docs` extra too:
-
-```bash
-uv sync --extra legacy --extra docs
-```
-
-Use the resulting environment in your notebook interface. The Quarto CLI is a
-separate system installation; the `docs` extra does not install it. These
-dependencies also do not make historical CUDA training cells run on CPU.
+The all-extras environment includes the Python dependencies used by historical
+notebooks and documentation. Select the checkout's `.venv` Python in your
+notebook interface. The Quarto CLI is a separate system installation; Python
+dependencies do not install it or make historical CUDA training cells run on CPU.
 
 ## Develop and run tests
 
-uv includes the development dependency group by default. Include the pandas
-extra to exercise the optional pandas adapter tests as well as the legacy
-compatibility tests:
+uv includes the development dependency group by default. Keep the same
+all-extras environment for the optional pandas adapter and legacy tests:
 
 ```bash
-uv sync --extra legacy --extra pandas
-uv run --extra legacy --extra pandas pytest -v
-uv run ty check src
-uv run ruff check src tests
+uv sync --locked --all-extras
+uv run --locked --all-extras pytest -v
+uv run --locked --all-extras ty check src
+uv run --locked --all-extras ruff check src tests
 ```
 
 The automated numerical test suite runs on CPU. Passing those tests does not

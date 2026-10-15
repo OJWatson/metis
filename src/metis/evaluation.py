@@ -59,7 +59,8 @@ class EvaluationReport:
             import matplotlib.pyplot as plt
         except ImportError as exc:
             raise ImportError(
-                "Plotting requires: pip install 'metis-surrogate[plots]'"
+                "Plotting requires: uv add "
+                "'metis-surrogate[plots] @ git+https://github.com/OJWatson/metis.git'"
             ) from exc
         names = self.by_output["output"].to_list()
         if output is not None and output not in names:

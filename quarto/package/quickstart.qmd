@@ -10,19 +10,83 @@ A short run is not a scientifically validated epidemic surrogate.
 
 ## Install
 
-Use Python 3.11 or newer in an isolated environment. The following chooses
-CPU PyTorch. For CUDA, install the PyTorch build appropriate to your hardware.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and Git.
+Python 3.11+ is supported; this example asks uv to manage Python 3.13 for a new
+project. You do not need to create or activate an environment yourself.
 
 ```bash
-python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-python -m pip install "metis-surrogate @ git+https://github.com/OJWatson/metis.git"
-metis demo --steps 100 --output metis-demo
+uv init my-surrogate --python 3.13
+cd my-surrogate
 ```
 
-This creates `model.pt`, `metrics.json` and `prediction.npy`. `model.pt` includes
+On **Linux or Windows**, choose the CPU PyTorch index:
+
+```bash
+uv add "torch>=2.10,<3" --index pytorch-cpu=https://download.pytorch.org/whl/cpu
+```
+
+The command writes the dependency and named index into `pyproject.toml`.
+Set `explicit = true` on that index, and use a platform marker for the torch
+source so the same project can use PyPI on Apple Silicon macOS. Replace the generated torch
+source and CPU index entries with these entries; do not duplicate the tables:
+
+```toml
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+```
+
+The explicit index supplies torch; unrelated dependencies continue to come from
+PyPI. On **Apple Silicon macOS**, use the platform build from PyPI instead:
+
+```bash
+uv add "torch>=2.10,<3"
+```
+
+Intel Macs are unsupported by the current PyTorch dependency range.
+
+Now add METIS and run the bundled demo:
+
+```bash
+uv add "metis-surrogate @ git+https://github.com/OJWatson/metis.git"
+uv run metis demo --steps 100 --output metis-demo
+```
+
+uv maintains three things for you: `pyproject.toml` records project dependencies,
+`uv.lock` records their resolved versions, and `.venv` contains the environment.
+Keep the first two with your analysis code. `uv run` uses and synchronizes that
+environment, so no manual activation is needed. On another machine, run
+`uv sync --locked` in the project and use the same `uv run` commands.
+
+The demo creates `model.pt`, `metrics.json` and `prediction.npy` inside
+`metis-demo/`. `model.pt` includes
 preprocessing and the ordered input/output schema, so it can be moved to a
 machine that does not have the original bank. The package is not yet on PyPI;
 the existing `metis` PyPI project is unrelated.
+
+Optional features are recorded with the dependency, so they remain installed
+on later `uv run` calls. For figures, pandas tables and tracking:
+
+```bash
+uv add "metis-surrogate[plots,pandas,wandb] @ git+https://github.com/OJWatson/metis.git"
+```
+
+Choose just the extras you need. To run the Python cells below in a notebook,
+add the `[docs]` extra and select the project's `.venv` Python as your notebook
+kernel. Include any previously selected extras in the requirement:
+
+```bash
+uv add "metis-surrogate[plots,pandas,wandb,docs] @ git+https://github.com/OJWatson/metis.git"
+```
+
+Alternatively, save the two Python code cells in one script and run it with
+`uv run python my_surrogate.py` from this project directory.
 
 ## Train in Python
 
@@ -66,9 +130,36 @@ outside the training input ranges emits a warning rather than clipping values.
 ## Use Hydra instead
 
 ```bash
-metis train model=mlp training.steps=500 training.device=cpu
+uv run metis train model=mlp training.steps=500 training.device=cpu
 ```
 
 This calls the same `Surrogate.fit` and evaluation methods. Hydra adds
 configuration composition, run directories, overrides and sweeps.
 See [the Hydra workflow](hydra.qmd).
+
+## Optional CUDA setup
+
+The default example uses CPU. For NVIDIA GPU training on Linux or Windows,
+choose a PyTorch CUDA index compatible with your driver and platform using
+the [uv guide to PyTorch](https://docs.astral.sh/uv/guides/integration/pytorch/).
+For example, **if CUDA 12.8 is appropriate for your machine**, switch the
+project's torch source with:
+
+```bash
+uv add "torch>=2.10,<3" --index pytorch-cu128=https://download.pytorch.org/whl/cu128
+```
+
+Set `explicit = true` on the new `pytorch-cu128` index in `pyproject.toml` and
+keep its torch source restricted to Linux and Windows, as in the CPU example.
+Use that CUDA index for torch instead of the CPU index. `uv add` updates the
+project and lockfile; after any manual source edits, run `uv sync` to update the
+resolution. This changes Python dependencies, not the NVIDIA driver.
+
+```bash
+uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+uv run metis train model=mlp training.device=cuda
+```
+
+For Python code, set `TrainingConfig(device="cuda")`. CUDA is not available on
+macOS, and these setup instructions do not establish that a particular GPU,
+driver or precision combination has been validated.

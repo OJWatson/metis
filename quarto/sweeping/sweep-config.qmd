@@ -6,6 +6,11 @@ title: "METIS sweep config"
 
 In this walkthrough we'll see how to setup a sweep for an MLP model on our SIRDS dataset. As with training, sweeps in Metis are driven through a config.
 
+This is a historical source-checkout recipe. Complete the
+[advanced source setup](../basics/installing_metis.qmd), including CUDA PyTorch
+and all optional dependencies. For the installed package, use the
+[Hydra and tracking workflow](../package/hydra.qmd).
+
 ### 1. Hyperparameters to sweep over
 For this walkthrough we'll focus on sweeping over the `peak_lr`, the `lr_warmup_frac`, the number of model blocks, and the hidden dimension of the model. We'll keep batch size, layers per block and the maximum number of steps fixed.
 
@@ -106,7 +111,7 @@ command:
 Save this to `configs/sweep/sirds/mlp.yaml`. Now we're ready to register our sweep with Weights & Biases:
 
 ```bash
-uv run wandb sweep --project your_existing_weights_and_biases_project configs/sweep/sirds/mlp.yaml
+uv run --locked --all-extras wandb sweep --project your_existing_weights_and_biases_project configs/sweep/sirds/mlp.yaml
 ```
 This will output a string of the form `<entity>/<project-name>/<sweep-id>` that we'll give to weights and biases agents when launching sweeps.
 
@@ -117,5 +122,5 @@ Now that our sweep is registered with weights an biases it should appear in the 
 To start an agent:
 
 ```bash
-uv run wandb agent --count <this agent's experiment budget> <entity>/<project-name>/<sweep-id>
+uv run --locked --all-extras wandb agent --count <this agent's experiment budget> <entity>/<project-name>/<sweep-id>
 ```
