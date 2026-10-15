@@ -127,7 +127,25 @@ The report exposes `metrics` (aggregate dictionary), `by_output` and `by_group`
 `plot(output=None, max_runs=4)` requires the `[plots]` extra. Metrics include
 MAE/RMSE, replicate-mean error when supported, and stochastic empirical CRPS,
 pointwise 90% coverage and interval width. See [evaluation](evaluation.qmd)
-for metric definitions, partition handling and constraint syntax.
+for metric definitions and interpretation.
+
+Explicit checks report violations without modifying predictions. For a SIRDS
+bank with population 1,000, for example:
+
+```python
+report = surrogate.evaluate(split.test, constraints={
+    "nonnegative": ["S_t", "I_t", "R_t", "D_t"],
+    "nondecreasing": ["D_t"],
+    "conserved_total": {
+        "outputs": ["S_t", "I_t", "R_t", "D_t"],
+        "value": 1000, "atol": 0.001,
+    },
+})
+print(report.metadata["constraints"])
+```
+
+Choose checks and a conservation tolerance appropriate to your simulator.
+Nonnegative and nondecreasing checks use strict zero thresholds.
 
 ## Persistence and inspection
 

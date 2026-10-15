@@ -61,7 +61,7 @@ comparison.round(2)
 ```
 
 All four SIRDS outputs are counts. Here the decision rule is the lowest
-validation RMSE averaged over those outputs. Use a different, explicit rule
+validation RMSE pooled across those outputs. Use a different, explicit rule
 when some outputs matter more or their units differ.
 
 ```{python}
