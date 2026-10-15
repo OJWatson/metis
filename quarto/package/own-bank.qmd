@@ -22,6 +22,8 @@ $d s_t+\eta_t$, with independent $N(0,0.05^2)$ noise. This gives 30 parameter
 settings, three replicates each and 12 timepoints; it is a data-handling exercise.
 
 ```{python}
+#| code-fold: true
+#| code-summary: "Create the example simulation bank"
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np

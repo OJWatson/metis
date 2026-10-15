@@ -65,6 +65,8 @@ validation RMSE averaged over those outputs. Use a different, explicit rule
 when some outputs matter more or their units differ.
 
 ```{python}
+#| code-fold: true
+#| code-summary: "Show plotting code"
 #| label: fig-model-comparison
 #| fig-cap: "MLP and transformer fitted to the same SIRDS training partition for 500 steps: autonomous prediction RMSE on the validation partition, compared with the training-mean baseline."
 fig, ax = plt.subplots(figsize=(7, 3))

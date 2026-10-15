@@ -36,6 +36,8 @@ print("Outputs:", ", ".join(bank.output_names))
 ```
 
 ```{python}
+#| code-fold: true
+#| code-summary: "Show plotting code"
 #| label: fig-quickstart-bank
 #| fig-cap: "Bundled SIRDS bank: infected counts for three parameter settings, with all five simulator replicates shown."
 fig, axes = plt.subplots(1, 3, figsize=(11, 3), sharey=True)
@@ -72,6 +74,8 @@ A *step* is one optimizer update. This MLP predicts one trajectory per input
 setting; it does not generate the variation between simulator replicates.
 
 ```{python}
+#| code-fold: true
+#| code-summary: "Show plotting code"
 #| label: fig-quickstart-loss
 #| fig-cap: "MLP fitted to the SIRDS training partition: standardized mean squared error during 500 optimizer updates."
 history = pd.DataFrame(model.history)
@@ -96,6 +100,8 @@ report.by_output.to_pandas().round(2)
 ```
 
 ```{python}
+#| code-fold: true
+#| code-summary: "Show plotting code"
 #| label: fig-quickstart-test
 #| fig-cap: "MLP fitted to the SIRDS training partition: generated trajectories against the first held-out test realization."
 fig, axes = plt.subplots(2, 2, figsize=(9, 6), sharex=True)

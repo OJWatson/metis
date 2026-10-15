@@ -22,6 +22,8 @@ switches from 0 to 1 at a scenario-specific time. The transformer must predict
 `stock` from `gain` and the history of `forcing`.
 
 ```{python}
+#| code-fold: true
+#| code-summary: "Create the example simulation bank"
 import matplotlib.pyplot as plt
 import numpy as np
 import torch

@@ -22,6 +22,8 @@ $\epsilon_t\sim N(0,0.03^2)$ adds observation-scale variation. This simple
 simulator gives us repeated trajectories at each input setting.
 
 ```{python}
+#| code-fold: true
+#| code-summary: "Create the example simulation bank"
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
