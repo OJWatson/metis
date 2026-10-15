@@ -8,9 +8,7 @@ simulation bank, so presets are starting points rather than selected optima.
 
 METIS splits by scenario group: all realizations in a group remain together.
 Train weights on training groups, choose settings on validation groups and
-reserve test groups for the final selected model. Random group splitting measures
-performance under that sampling design; it is not automatically a test of
-extrapolation to a new scientific regime.
+reserve test groups for the final selected model. To test a new input region, hold that region out explicitly.
 
 ## A reproducible comparison
 
@@ -23,8 +21,7 @@ extrapolation to a new scientific regime.
 
 Changing a model changes its training objective, so MSE, flow-matching loss and
 negative log density cannot be ranked as though they were the same metric.
-If test results drive further development, those groups have become part of
-model selection; reserve a new independent test for a final claim.
+If you tune settings after seeing test results, reserve a new test bank.
 
 Use [Hydra multirun](../package/hydra.qmd#sweeps) for local configuration grids,
 or [W&B sweeps](sweep-config.qmd) for tracked searches. W&B remains optional;

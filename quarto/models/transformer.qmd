@@ -1,19 +1,83 @@
 ---
 title: "Transformer"
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
+execute:
+  eval: true
 ---
-The autoregressive transformer model is a flexible and deterministic surrogate.
 
-## When this might be a good fit
+The autoregressive transformer predicts a trajectory one step at a time,
+using earlier steps to help predict the next. Its predictions are deterministic.
+It supports static inputs and [observed sequences](../package/conditioning.qmd).
 
-The transformer is a great option when a deterministic surrogate suffices. Furthermore, it is more flexible than an MLP, supporting conditioning on both static inputs and sequences. The installed API uses a fixed training grid; observed sequences are explicitly selected conditioning channels rather than an arbitrary observed prefix.
+It can learn rich temporal patterns, but usually takes more computation and
+tuning than an MLP. Start by comparing both on your validation bank.
 
-Unfortunately, Transformer surrogates are slower to train and infer with and often require more tuning to match the performance of an MLP. However, they tend to benefit more from scaling data or the size of the network.
+## Try it
 
-<!-- TODO: the kinds of problems a Transformer surrogate suits. -->
+This small continuous-valued example uses 40 parameter settings, four
+realisations per setting and eight time points. The response is
+$y(t)=\theta(1+\sin t)+0.3\cos t+\epsilon$, with independent
+$\epsilon\sim N(0,0.08^2)$. The known mean lets us see what the surrogate learns.
+This is a short teaching fit, not a benchmark of the model families.
 
-## How transformers work
+```{python}
+#| code-fold: true
+#| code-summary: "Create the example bank"
+import numpy as np
+import matplotlib.pyplot as plt
+from metis import SimulationDataset, Surrogate, TrainingConfig
 
-### Architectural walkthrough
+rng = np.random.default_rng(7)
+times = np.linspace(0, 2, 8)
+inputs = np.repeat(np.linspace(0.2, 1.2, 40)[:, None], 4, axis=0)
+mean = inputs[:, None, :] * (1 + np.sin(times)[None, :, None])
+mean = mean + 0.3 * np.cos(times)[None, :, None]
+outputs = mean + rng.normal(0, 0.08, mean.shape)
+bank = SimulationDataset.from_arrays(
+    inputs, outputs, input_names=["theta"], output_names=["response"], times=times,
+)
+split = bank.split(seed=42)
+```
+
+```{python}
+model = Surrogate(
+    "transformer",
+    model_options={"n_layer": 1, "n_head": 2, "n_kv_head": 2, "n_embd": 32},
+).fit(
+    split.train, split.validation,
+    config=TrainingConfig(steps=300, batch_size=32, eval_every=50, seed=42),
+)
+```
+
+Compare the prediction with the known mean and one held-out realisation.
+
+```{python}
+theta = split.test.inputs[:1]
+prediction = model.predict(theta)[0, :, 0]
+expected = theta[0, 0] * (1 + np.sin(times)) + 0.3 * np.cos(times)
+print(f"RMSE against the known mean at theta={theta[0, 0]:.3f}: "
+      f"{np.sqrt(np.mean((prediction - expected) ** 2)):.3f}")
+```
+
+```{python}
+#| code-fold: true
+#| code-summary: "Plot the held-out prediction"
+#| fig-cap: "Transformer: short CPU fit on the synthetic continuous bank. This parameter setting was withheld from training."
+fig, ax = plt.subplots(figsize=(6, 3.5))
+ax.plot(times, split.test.outputs[0, :, 0], "o", label="Held-out realisation")
+ax.plot(times, expected, "--", color="black", label="Known mean")
+ax.plot(times, prediction, label="Transformer prediction")
+ax.set(xlabel="Time", ylabel="Response")
+ax.legend()
+fig.tight_layout()
+plt.show()
+```
+
+## How it works
 The transformer architecture is substantially more complex than an MLP's so we won't cover it in great depth here.
 
 The most important part of the Transformer architecture is the *self-attention* mechanism which enables the model to process sequence data in a highly expressive way. In an attention computation, the entries of an incoming sequence $x_1, x_2, \dots, x_n$ are given corresponding *query*, *key* and *value* vectors via projection matrices (e.g. $q_1=W_{q}x_1^T$).  These entries are collected in a $Q$ (query), $K$ (key) and $V$ (value) matrix and the transformed sequence is computed via $y=\mathrm{softmax}(\frac{QK^T}{\sqrt{d}})V$. In an autoregressive transformer this computation is restricted so that query vectors may only *attend* to key vectors from the past:
@@ -34,9 +98,9 @@ Multi-head attention: Each block is a projected sequence of query, key, or value
 :::
 ::::
 
-During training the attention computation can be done over entire sequences at once (this is a major strength of the transformer), however, during inference, the sequence is iteratively generated. Since the latest entry in the sequence still needs to attend to every entry that came before it we are forced to either repeatedly recompute prior *key* and *value* vectors or to store them in a *Key-Value Cache* (KV-Cache). For larger transformers or generating longer sequences using a KV-Cache can significantly speed up inference.
+During training the attention computation can be done over entire sequences at once (this is a major strength of the transformer), however, during inference, the sequence is iteratively generated. Since the latest entry in the sequence still needs to attend to every entry that came before it we are forced to either repeatedly recompute prior *key* and *value* vectors or to store them in a *Key-Value Cache* (KV-Cache). The low-level architecture includes a KV-cache, but the public prediction interface currently recomputes the history.
 
-In Metis we also support options like interleaving full self-attention with *sliding window* attention which halves the maximum size of the attention window for a computational speedup:
+METIS includes architecture options such as interleaving full self-attention with *sliding window* attention which halves the maximum size of the attention window for a computational speedup:
 
 
 ::: {#fig-sliding-window-attention}
@@ -53,31 +117,26 @@ We additionally support specifying fewer key-value heads (i.e. projections) than
 Grouped-query attention: Multiple query heads share each key-value head.
 :::
 
-<!-- TODO: brief primer — attention, embeddings, sequence conditioning. -->
+
 
 ### Training
 
 Language transformers train with *Cross-Entropy Loss* over tokens but since our data is typically continuous, we use a next-token MSE loss.
 
-## Configuring a Transformer
+## Change its size
 
-The installed `model=transformer` preset uses `n_layer=2`, `n_head=4`,
-`n_kv_head=4`, `n_embd=64`. Layers control depth; embedding width controls capacity.
-Query/key-value heads split attention into subspaces. Width must divide cleanly
-among the heads, and query heads must be compatible with key-value heads.
-Sequence length and static/output dimensions come from the bank.
+`n_layer` controls depth and `n_embd` controls width. `n_head` and `n_kv_head`
+control attention heads; the width must divide evenly among the heads.
+The default has two layers, width 64 and four heads of each kind.
 
 ```bash
 uv run metis train model=transformer model.model_options.n_layer=4 model.model_options.n_embd=128
 ```
 
-Optional architecture settings include `window_pattern` (`L` full attention,
-`S` shorter context), `rope_base` and `in_and_out_biases`. To add an option omitted
-from the preset, use e.g. `+model.model_options.window_pattern=SL`. Defaults use
-full attention. Configure observed sequences through
-`model.observed_outputs=[intervention]`, not a low-level cross-attention object;
-see [sequence conditioning](../package/conditioning.qmd).
+Optional `window_pattern` settings alternate full (`L`) and shorter (`S`)
+attention. For example, `+model.model_options.window_pattern=SL` adds this
+option to the preset.
 
-The public API predicts the fitted fixed grid. The underlying autoregressive
-architecture does not imply public support for arbitrary horizons or observed
-prefix continuation. Evaluate autonomous rollouts as well as next-step loss.
+The public API predicts the time grid used for training. Check complete
+predicted trajectories, since a low next-step training loss does not guarantee
+an accurate autonomous rollout.

@@ -1,202 +1,123 @@
 ---
-title: "Walkthrough: Preparing data for METIS"
+title: "Prepare a simulation bank"
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
+execute:
+  eval: true
 ---
 
-Before training a surrogate, you need a dataset of simulator inputs (parameters)
-paired with outputs (realisations).
+METIS needs simulator inputs paired with their output trajectories. You can
+supply arrays, a data frame or a Parquet file. This walkthrough creates a small
+SIRDS bank and saves it for reuse.
 
-::: {.callout-tip}
-This walkthrough uses Python to prepare the data and expects that you have packages like matplotlib, pandas and numpy installed.
-However, you can use any language or packages you're comfortable with.
-:::
-<!-- ::: {.callout-note}
-Cross-reference the [SIRDS example](sirds-example.qmd) for the simulator we are
-sampling from.
-::: -->
+## One row per time point
 
-## Flattening a single realisation
-
-METIS expects the timeseries realisations to be stored in parquet files in a flat format. For example, let's consider a single realisation where the columm 'a' varies over time.
+Use one column for each input and output, a time column (`t`) and a replicate
+identifier (`rep`). Inputs stay constant within a realisation. Replicate IDs
+separate stochastic realisations at the same inputs.
 
 ```{python}
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
+from metis import SimulationDataset
+from metis.datasets.sirds import simulate_sirds
 
-a = [0.5, 0.85, 0.74, 0.94, 1.01]
-plt.plot(a, marker='D')
-plt.xlabel('t')
-plt.ylabel('a')
+parameters = dict(I0=0.005, beta=0.4, gamma=0.1, omega=0.02, mu=0.01)
+S, I, R, D = simulate_sirds(**parameters, T=40, seed=0)
+frame = pd.DataFrame({
+    "rep": 0, "t": np.arange(1, 41),
+    "S": S[1:], "I": I[1:], "R": R[1:], "D": D[1:],
+    **parameters,
+})
+frame.head()
+```
+
+Here we omit day zero, the known initial state. We use exactly the same daily
+grid in every realisation; METIS does not interpolate missing times.
+
+## Sample the input space
+
+For a quick example, vary transmission and recovery rates at 30 settings and
+simulate three replicates at each. Keep the other inputs fixed. The independent
+uniform draws below are a demonstration design; choose ranges and a sampling
+design appropriate to your model for a research bank.
+
+```{python}
+rng = np.random.default_rng(42)
+settings = pd.DataFrame({
+    "beta": rng.uniform(0.15, 0.7, 30),
+    "gamma": rng.uniform(0.05, 0.25, 30),
+})
+fig, ax = plt.subplots(figsize=(5, 3))
+ax.scatter(settings.beta, settings.gamma)
+ax.set(xlabel="Transmission rate (beta)", ylabel="Recovery rate (gamma)",
+       title="SIRDS example: 30 parameter settings")
 plt.show()
 ```
 
-Then in a 'flat' format this data would have 5 rows, and two columns:
+## Simulate and combine
 
 ```{python}
-import pandas as pd
-
-pd.DataFrame({'a':a, 't':range(5)})
-
-```
-
-## Multiple SIRDS realisations
-
-For the SIRDS simulator we also need to store the simulator's inputs and disambiguate between different realisations with the same inputs. Simulator inputs are just treated as another column, and different realisations are disambiguated via the 'rep' column:
-
-
-
-```{python}
-#| code-fold: true
-import numpy as np
-import pandas as pd
-
-
-from metis.datasets.sirds import simulate_sirds
-```
-
-```{python}
-# the simulator inputs
-params = dict(I0=0.005, beta=0.4, gamma=0.1, omega=0.02, mu=0.01)
-
-# number of realisations we would like
-n_reps = 5
-
 frames = []
-for rep in range(n_reps):
-
-    S, I, R, D = simulate_sirds(seed=rep, **params, T=100)
-    S,I,R,D=S[1:],I[1:],R[1:], D[1:] # this example explicitly omits the known initial state
-    t = np.arange(1, len(S) + 1)
-    frames.append(pd.DataFrame({
-        "rep": rep,
-        "t": t,
-        "I_t": I,
-        "S_t": S,
-        "R_t": R,
-        "I_0": params["I0"],
-        "beta": params["beta"],
-        "gamma": params["gamma"],
-        "omega": params["omega"],
-        "mu":params["mu"],
-    }))
-    df = pd.concat(frames, ignore_index=True)
-
-print(f"reps:  {df['rep'].unique()}")
-df
+for setting, row in settings.iterrows():
+    inputs = dict(I0=0.02, beta=row.beta, gamma=row.gamma, omega=0.02, mu=0.01)
+    for rep in range(3):
+        S, I, R, D = simulate_sirds(**inputs, T=40, seed=3 * setting + rep)
+        frames.append(pd.DataFrame({
+            "rep": rep, "t": np.arange(1, 41),
+            "S": S[1:], "I": I[1:], "R": R[1:], "D": D[1:],
+            **inputs,
+        }))
+frame = pd.concat(frames, ignore_index=True)
+print(f"{len(settings)} settings × 3 replicates × 40 days = {len(frame):,} rows")
+frame.head()
 ```
 
+## Validate and split
 
-
-## Sampling the parameter space
-When building a dataset of simulator realisations its important to consider which regions of the simulator's parameter (or input) space you sample and how they are sampled. For example, a simulator may be more sensitive in a certain parameter region or parameters physically constrained to lie within a particular range. For our example we will simply sample uniformly within reasonable ranges but another popular approach is Latin Hypercube Sampling (see [Scipy Latin Hypercube](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.qmc.LatinHypercube.html)).
-
-<!-- - Sample the parameter space uniformly to start with.
-- Mention more sophisticated approaches such as Latin Hypercube Sampling (LHS). -->
-
+Tell METIS which columns are inputs and outputs. It checks the grid, duplicate
+rows, missing values and whether inputs stay constant within each realisation.
+The split keeps all replicates at the same parameter setting together.
 
 ```{python}
-import seaborn as sns
-
-N_PARAMS = 100  # Small documentation exercise; choose a design for actual research.
-
-# reproducible parameter sampling
-param_rng = np.random.default_rng(42)
-I0_vals = param_rng.uniform(0.01, 0.1, N_PARAMS)
-beta_vals = param_rng.uniform(0.10, 0.80, N_PARAMS)
-gamma_vals = param_rng.uniform(0.05, 0.30, N_PARAMS)
-omega_vals = param_rng.uniform(0.005, 0.05, N_PARAMS)
-mu_vals = param_rng.uniform(0.005, 0.05, N_PARAMS)
-
-#visualise the sampled space
-sns.pairplot(
-    pd.DataFrame({'I0':I0_vals, 'beta':beta_vals, 'gamma':gamma_vals, 'omega':omega_vals, 'mu':mu_vals}), corner=True,height=2
+bank = SimulationDataset.from_frame(
+    frame,
+    inputs=["I0", "beta", "gamma", "omega", "mu"],
+    outputs=["S", "I", "R", "D"],
 )
-```
-
-
-## Creating the full dataset
-Given our parameters we can now create an entire dataset.
-
-```{python}
-import time
-N_REPS = 5
-T, DT = 200, 1.0
-n_steps_sim = int(T / DT) + 1  # simulator produces this many steps including t=0
-n_steps = n_steps_sim - 1  # this example explicitly omits the known initial state
-total_rows = N_PARAMS * N_REPS * n_steps
-
-
-# preallocate
-t_template = np.arange(1, n_steps_sim) * DT
-rep = np.empty(total_rows, dtype=np.int32)
-t_col = np.empty(total_rows, dtype=np.float32)
-I_col = np.empty(total_rows, dtype=np.int32)
-S_col = np.empty(total_rows, dtype=np.int32)
-R_col = np.empty(total_rows, dtype=np.int32)
-D_col = np.empty(total_rows, dtype=np.int32)
-I0_col = np.empty(total_rows, dtype=np.float32)
-beta_col = np.empty(total_rows, dtype=np.float32)
-gamma_col = np.empty(total_rows, dtype=np.float32)
-omega_col = np.empty(total_rows, dtype=np.float32)
-mu_col = np.empty(total_rows, dtype=np.float32)
-
-print(f"Running {N_PARAMS} × {N_REPS} = {N_PARAMS * N_REPS} simulations...")
-t0 = time.time()
-
-row = 0
-for i in range(N_PARAMS):
-    params = dict(
-        I0=I0_vals[i], beta=beta_vals[i], gamma=gamma_vals[i], omega=omega_vals[i], mu=mu_vals[i]
-    )
-    for r in range(N_REPS):
-        seed = i * N_REPS + r  # unique across all runs
-        S, I, R,D = simulate_sirds(seed=seed, T=T, dt=DT, **params)
-
-        sl = slice(row, row + n_steps)
-        rep[sl] = r + 1  # 1..5
-        t_col[sl] = t_template
-        I_col[sl] = I[1:]
-        S_col[sl] = S[1:]
-        R_col[sl] = R[1:]
-        D_col[sl] = D[1:]
-        I0_col[sl] = params["I0"]
-        beta_col[sl] = params["beta"]
-        gamma_col[sl] = params["gamma"]
-        omega_col[sl] = params["omega"]
-        mu_col[sl] = params["mu"]
-        row += n_steps
-
-    if (i + 1) % 100 == 0:
-        print(f"  {i + 1}/{N_PARAMS} inputs done ({time.time() - t0:.1f}s)")
+split = bank.split(seed=42)
+print("Input array:", bank.inputs.shape)
+print("Output array:", bank.outputs.shape)
+print("Realisations in train / validation / test:",
+      len(split.train.inputs), len(split.validation.inputs), len(split.test.inputs))
 ```
 
 ```{python}
-df = pd.DataFrame(
-    {
-        "rep": rep,
-        "t": t_col,
-        "I_t": I_col,
-        "S_t": S_col,
-        "R_t": R_col,
-        "D_t": D_col,
-        "I_0": I0_col,
-        "beta": beta_col,
-        "gamma": gamma_col,
-        "omega": omega_col,
-        "mu": mu_col,
-    }
-)
-
-df
+#| fig-cap: "SIRDS example bank: infected trajectories from the first four parameter settings, with three replicates per setting."
+fig, axes = plt.subplots(1, 4, figsize=(11, 3), sharex=True, sharey=True)
+for ax, setting in zip(axes, range(4)):
+    start = setting * 3 * 40
+    subset = frame.iloc[start:start + 3 * 40]
+    for _, trajectory in subset.groupby("rep"):
+        ax.plot(trajectory.t, trajectory.I, alpha=0.7)
+    ax.set(title=f"Setting {setting + 1}", xlabel="Day")
+axes[0].set_ylabel("Infected people")
+fig.tight_layout()
+plt.show()
 ```
 
-And thats it as far as data preparation is concerned! To actually save this dataframe as a parquet file simply use
+## Save for another session
 
-```python
-df.to_parquet( "sirds_data.parquet", index=False, compression="snappy")
+```{python}
+frame.to_parquet("sirds_data.parquet", index=False)
+print("Saved sirds_data.parquet")
 ```
-Validate the resulting bank before training:
 
-```bash
-uv run metis inspect-data sirds_data.parquet --inputs I_0 beta gamma omega mu --outputs I_t S_t R_t D_t
-```
-Then use the [installed Hydra workflow](../package/hydra.qmd). The smaller
-[own-bank exercise](../package/own-bank.qmd) is the recommended first handoff.
+You can now [train a surrogate](../package/quickstart.qmd), replacing
+`load_example()` with `SimulationDataset.from_parquet("sirds_data.parquet", ...)`
+and the input/output names above. For CSV files from your own model, follow the
+[own-bank walkthrough](../package/own-bank.qmd).

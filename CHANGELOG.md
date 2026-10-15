@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Execute tutorials during the documentation build and publish their plots,
+  tables and downloadable notebooks with saved outputs.
+- Add Open in Colab links with shared, revision-pinned uv setup.
+- Simplify tutorial prose and keep installation and API details in reference pages.
+
 ## 0.3.0
 
 - Unify Python and installed Hydra training, including optional warm-up/cosine

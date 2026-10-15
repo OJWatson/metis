@@ -1,173 +1,148 @@
 ---
-title: "Train and reuse your first surrogate"
+title: "Train your first surrogate"
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
 execute:
-  eval: false
+  eval: true
 ---
 
-This example uses a bundled SIRDS simulation bank: 100 parameter groups, five
-replicates and 40 timepoints. It checks the complete workflow on a CPU.
-A short run is not a scientifically validated epidemic surrogate.
+Train a surrogate, check its predictions, then save it for reuse. This tutorial
+runs on a CPU using the bundled SIRDS epidemic simulations. If you are running
+locally, follow [installation](../basics/installing_metis.qmd) first.
 
-## Install
+## Look at the simulations
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and Git.
-Python 3.11+ is supported; this example asks uv to manage Python 3.13 for a new
-project. You do not need to create or activate an environment yourself.
-
-```bash
-uv init my-surrogate --python 3.13
-cd my-surrogate
-```
-
-On **Linux or Windows**, choose the CPU PyTorch index:
-
-```bash
-uv add "torch>=2.10,<3" --index pytorch-cpu=https://download.pytorch.org/whl/cpu
-```
-
-The command writes the dependency and named index into `pyproject.toml`.
-Set `explicit = true` on that index, and use a platform marker for the torch
-source so the same project can use PyPI on Apple Silicon macOS. Replace the generated torch
-source and CPU index entries with these entries; do not duplicate the tables:
-
-```toml
-[tool.uv.sources]
-torch = [
-    { index = "pytorch-cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-]
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-```
-
-The explicit index supplies torch; unrelated dependencies continue to come from
-PyPI. On **Apple Silicon macOS**, use the platform build from PyPI instead:
-
-```bash
-uv add "torch>=2.10,<3"
-```
-
-Intel Macs are unsupported by the current PyTorch dependency range.
-
-Now add METIS and run the bundled demo:
-
-```bash
-uv add "metis-surrogate @ git+https://github.com/OJWatson/metis.git"
-uv run metis demo --steps 100 --output metis-demo
-```
-
-uv maintains three things for you: `pyproject.toml` records project dependencies,
-`uv.lock` records their resolved versions, and `.venv` contains the environment.
-Keep the first two with your analysis code. `uv run` uses and synchronizes that
-environment, so no manual activation is needed. On another machine, run
-`uv sync --locked` in the project and use the same `uv run` commands.
-
-The demo creates `model.pt`, `metrics.json` and `prediction.npy` inside
-`metis-demo/`. `model.pt` includes
-preprocessing and the ordered input/output schema, so it can be moved to a
-machine that does not have the original bank. The package is not yet on PyPI;
-the existing `metis` PyPI project is unrelated.
-
-Optional features are recorded with the dependency, so they remain installed
-on later `uv run` calls. For figures, pandas tables and tracking:
-
-```bash
-uv add "metis-surrogate[plots,pandas,wandb] @ git+https://github.com/OJWatson/metis.git"
-```
-
-Choose just the extras you need. To run the Python cells below in a notebook,
-add the `[docs]` extra and select the project's `.venv` Python as your notebook
-kernel. Include any previously selected extras in the requirement:
-
-```bash
-uv add "metis-surrogate[plots,pandas,wandb,docs] @ git+https://github.com/OJWatson/metis.git"
-```
-
-Alternatively, save the two Python code cells in one script and run it with
-`uv run python my_surrogate.py` from this project directory.
-
-## Train in Python
+The bank contains 100 parameter settings, each simulated five times on the same
+40-point time grid. The inputs describe transmission and recovery; the outputs
+are susceptible, infected, recovered and dead population counts.
 
 ```{python}
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import torch
+from pathlib import Path
+
 from metis import load_example, Surrogate, TrainingConfig
 
+torch.set_num_threads(2)
 bank = load_example()
+print(f"{len(bank)} runs × {len(bank.times)} timepoints")
+print("Inputs:", ", ".join(bank.input_names))
+print("Outputs:", ", ".join(bank.output_names))
+```
+
+```{python}
+#| code-fold: true
+#| code-summary: "Show plotting code"
+#| label: fig-quickstart-bank
+#| fig-cap: "Bundled SIRDS bank: infected counts for three parameter settings, with all five simulator replicates shown."
+fig, axes = plt.subplots(1, 3, figsize=(11, 3), sharey=True)
+infected = bank.output_names.index("I_t")
+groups = list(dict.fromkeys(bank.group_keys))[:3]
+for ax, group in zip(axes, groups):
+    indices = [i for i, key in enumerate(bank.group_keys) if key == group]
+    for i in indices:
+        ax.plot(bank.times, bank.outputs[i, :, infected], alpha=0.65)
+    ax.set(xlabel="Simulator time", title=f"Parameter setting {groups.index(group) + 1}")
+axes[0].set_ylabel("Infected people")
+fig.tight_layout()
+plt.show()
+```
+
+## Fit an MLP
+
+Keep all replicates of a parameter setting together when splitting the bank.
+Training learns the model, validation chooses the best checkpoint, and the test
+set measures performance on settings that neither step has used.
+
+```{python}
 split = bank.split(validation_fraction=0.2, test_fraction=0.2, seed=42)
+print({name: len(getattr(split, name)) for name in ("train", "validation", "test")})
+
 model = Surrogate("mlp").fit(
     split.train,
     validation=split.validation,
-    config=TrainingConfig(steps=500, device="cpu"),
+    config=TrainingConfig(steps=500, eval_every=50, seed=42, device="cpu"),
 )
-report = model.evaluate(split.test)
-print(report.by_output)
-print(report.worst_groups(5))
-model.save("surrogate.pt")
-report.save("evaluation.json")
 ```
 
-A step is an optimizer update, not a full pass through the bank. Validation
-chooses the best evaluated model weights. The test set does not influence
-scaling, optimization or weight selection. Reserve it for assessing a final
-choice; a sweep should use validation for model comparison and assess test
-performance only after the choice is made.
-
-## Reload and predict
+A *step* is one optimizer update. This MLP predicts one trajectory per input
+setting; it does not generate the variation between simulator replicates.
 
 ```{python}
-restored = Surrogate.load("surrogate.pt")
-prediction = restored.predict({
-    "I_0": 0.04, "beta": 0.4, "gamma": 0.15, "omega": 0.02, "mu": 0.02
-})
-print(prediction.shape)  # (1, 40, 4), original compartment-count units
+#| code-fold: true
+#| code-summary: "Show plotting code"
+#| label: fig-quickstart-loss
+#| fig-cap: "MLP fitted to the SIRDS training partition: standardized mean squared error during 500 optimizer updates."
+history = pd.DataFrame(model.history)
+fig, ax = plt.subplots(figsize=(7, 3))
+ax.plot(history["step"], history["train_loss"], alpha=0.5, label="Training minibatch")
+validation = history.dropna(subset=["validation_loss"])
+ax.plot(validation["step"], validation["validation_loss"], "o-", label="Validation")
+ax.set(xlabel="Training step", ylabel="Standardized MSE", yscale="log")
+ax.legend()
+fig.tight_layout()
+plt.show()
 ```
 
-A dict names the inputs; arrays must follow `restored.input_names`. The time grid
-and output order are `restored.times` and `restored.output_names`. Extrapolating
-outside the training input ranges emits a warning rather than clipping values.
+## Check predictions on held-out simulations
 
-## Use Hydra instead
+RMSE and MAE are errors in the original population-count units. Inspect each
+output separately: an acceptable error depends on how you plan to use it.
+
+```{python}
+report = model.evaluate(split.test)
+report.by_output.to_pandas().round(2)
+```
+
+```{python}
+#| code-fold: true
+#| code-summary: "Show plotting code"
+#| label: fig-quickstart-test
+#| fig-cap: "MLP fitted to the SIRDS training partition: generated trajectories against the first held-out test realization."
+fig, axes = plt.subplots(2, 2, figsize=(9, 6), sharex=True)
+for c, ax in enumerate(axes.flat):
+    ax.plot(bank.times, report.observed[0, :, c], label="Simulator")
+    ax.plot(bank.times, report.predictions[0, :, c], label="Surrogate")
+    ax.set(xlabel="Simulator time", ylabel=bank.output_names[c])
+    ax.legend()
+fig.tight_layout()
+plt.show()
+```
+
+A successful fit is the start of evaluation. Continue with
+[model comparison](model-choice.qmd) and [fidelity checks](evaluation.qmd)
+before relying on a surrogate for research.
+
+## Save, reload and predict
+
+The saved model includes input/output names, the time grid and fitted scaling.
+Prediction needs only the artifact and new inputs, not the simulation bank.
+
+```{python}
+output = Path("quickstart-output")
+output.mkdir(exist_ok=True)
+model.save(output / "surrogate.pt")
+report.save(output / "evaluation.json")
+
+restored = Surrogate.load(output / "surrogate.pt")
+query = dict(zip(bank.input_names, split.test.inputs[0].tolist()))
+prediction = restored.predict(query)
+print("New input settings:", query)
+print("Prediction shape (settings, timepoints, outputs):", prediction.shape)
+np.testing.assert_allclose(prediction, model.predict(query))
+pd.DataFrame(prediction[0], columns=restored.output_names, index=restored.times).head()
+```
+
+Replace `query` with your own named input values. METIS warns if you move outside
+the fitted input ranges. Next, [bring your own simulation bank](own-bank.qmd).
+
+Prefer a configuration-driven run? [Hydra](hydra.qmd) uses the same training API:
 
 ```bash
-uv run metis train model=mlp training.steps=500 training.device=cpu
+uv run metis train model=mlp training.steps=500
 ```
-
-This calls the same `Surrogate.fit` and evaluation methods. Hydra adds
-configuration composition, run directories, overrides and sweeps.
-See [the Hydra workflow](hydra.qmd).
-
-## Optional CUDA setup
-
-The default example uses CPU. For NVIDIA GPU training on Linux or Windows,
-choose a PyTorch CUDA index compatible with your driver and platform using
-the [uv guide to PyTorch](https://docs.astral.sh/uv/guides/integration/pytorch/).
-For example, **if CUDA 12.8 is appropriate for your machine**, switch the
-project's torch source with:
-
-```bash
-uv add "torch>=2.10,<3" --index pytorch-cu128=https://download.pytorch.org/whl/cu128
-```
-
-Set `explicit = true` on the new `pytorch-cu128` index in `pyproject.toml` and
-keep its torch source restricted to Linux and Windows, as in the CPU example.
-Use that CUDA index for torch instead of the CPU index. `uv add` updates the
-project and lockfile; after any manual source edits, run `uv sync` to update the
-resolution. This changes Python dependencies, not the NVIDIA driver.
-
-```bash
-uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
-uv run metis train model=mlp training.device=cuda
-```
-
-For Python code, set `TrainingConfig(device="cuda")`. CUDA is not available on
-macOS, and these setup instructions do not establish that a particular GPU,
-driver or precision combination has been validated.
-
-## Move to your own model
-
-Continue with the [CSV own-bank exercise](own-bank.qmd), then use the
-[data contract](data.qmd), [model choice](model-choice.qmd) and
-[troubleshooting guide](troubleshooting.qmd) for your ABM. The package guides
-engineering choices and common diagnostics; your scientific target determines
-acceptable error, valid inputs and whether simulator variability matters.

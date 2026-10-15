@@ -1,53 +1,65 @@
 ---
 title: "Example SIRDS model"
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
+execute:
+  eval: true
 ---
 
-We use a stochastic SIRDS (Susceptible–Infected–Recovered–Dead–Susceptible)
-compartmental model as a running example throughout the docs. The particulars of how this model work aren't too important, but the basic idea is that our simulator depends on some static input parameters (I0, beta, etc...) and produces stochastic timeseries of compartment counts over time.
+We use a stochastic SIRDS model throughout the examples. People move between
+**susceptible**, **infected**, **recovered** and **dead** compartments; recovered
+people can become susceptible again.
 
-## Code definition
+The inputs are the initial infected fraction (`I0`) and four rates:
+transmission (`beta`), recovery (`gamma`), waning immunity (`omega`) and death
+(`mu`). The outputs are the four population counts at each time step.
 
-The canonical implementation is imported from the installed package. It advances
-counts in discrete steps (default one day), using binomial infection/waning draws
-and a multinomial recovery/death/stay draw. Population size defaults to 1000;
-`I0` fixes the initial infected fraction and the four rates are supplied inputs,
-not parameters inferred in this example. Recovery and death probabilities are
-`1-exp(-rate*dt)` and must sum to at most one. This preserves the original tutorial's
-discrete competing-risk approximation; it is not an exact continuous-time process.
-All displayed variation comes from process draws at fixed inputs.
+## Run the simulator
+
+This example fixes all inputs, uses a population of 1,000 and takes daily steps.
+Changing the random seed gives a different realisation of the same process.
 
 ```{python}
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
-
-
 from metis.datasets.sirds import simulate_sirds
+
+parameters = dict(I0=0.005, beta=0.4, gamma=0.1, omega=0.02, mu=0.01)
+trajectories = np.array([
+    simulate_sirds(**parameters, N=1000, T=120, dt=1, seed=seed)
+    for seed in range(20)
+])
+print("Shape (realisations, compartments, time points):", trajectories.shape)
+print("Population conserved:", bool(np.all(trajectories.sum(axis=1) == 1000)))
 ```
 
-
-## Example realisations
-
-Here we again emphasise that even with fixed input parameters, varying the random seed produces different realisations.
 ```{python}
-fig, ax = plt.subplots(1, 1, figsize=(10, 4.5))
-for s in range(20):
-    S, I, R, D = simulate_sirds(seed=s)
-    t = np.arange(len(S))
-    ax.plot(t, S, color="#2E86AB", label="S" if s == 0 else None, alpha=0.35, lw=1)
-    ax.plot(t, I, color="#C73E1D", label="I" if s == 0 else None, alpha=0.35, lw=1)
-    ax.plot(t, R, color="#6A994E", label="R" if s == 0 else None, alpha=0.35, lw=1)
-    ax.plot(t, D, color="#C21B8A", label="D" if s == 0 else None, alpha=0.35, lw=1)
-ax.set(
-    xlabel="time (days)",
-    ylabel="count",
-    title="",
-)
-ax.legend()
-
-plt.tight_layout()
+#| fig-cap: "SIRDS: 20 simulations at the same parameter values. The variation is from stochastic process draws, not fitted parameter uncertainty."
+fig, axes = plt.subplots(1, 4, figsize=(11, 3), sharex=True, sharey=True)
+for i, (label, colour) in enumerate(zip(
+    ["Susceptible", "Infected", "Recovered", "Dead"],
+    ["#2E86AB", "#C73E1D", "#6A994E", "#C21B8A"],
+)):
+    axes[i].plot(np.arange(121), trajectories[:, i, :].T,
+                 color=colour, alpha=0.35, linewidth=1)
+    axes[i].set(title=label, xlabel="Day")
+axes[0].set_ylabel("People")
+fig.tight_layout()
 plt.show()
 ```
 
-<!-- TODO: plot a few stochastic realisations to show what the surrogate will
-have to learn. -->
+A deterministic surrogate learns one trajectory for these inputs. A stochastic
+surrogate can generate multiple trajectories, aiming to reproduce the
+variation as well as the average.
+
+::: {.callout-note collapse="true" title="Time stepping"}
+The simulator uses binomial draws for infection and waning, and a multinomial
+draw for recovery, death or remaining infected. Recovery/death probabilities
+are `1 - exp(-rate * dt)` and must sum to at most one. This discrete approximation
+preserves the population; it is not an exact continuous-time simulation.
+:::
+
+Next, [put simulations into a data table](preparing-data.qmd).

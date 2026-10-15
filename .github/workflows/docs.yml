@@ -12,7 +12,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       OMP_NUM_THREADS: "2"
       MKL_NUM_THREADS: "2"
@@ -32,20 +32,46 @@ jobs:
         run: |
           uv sync --locked --extra docs
           echo "QUARTO_PYTHON=$GITHUB_WORKSPACE/.venv/bin/python" >> "$GITHUB_ENV"
-      - name: Execute installed-package beginner workflow
-        run: uv run --locked --extra docs python examples/package_quickstart.py --steps 20 --output /tmp/metis-doc-example
-      - name: Render site
-        run: uv run --locked --extra docs quarto render quarto --to all --no-execute
-      - name: Check local documentation links and assets
-        run: uv run --locked --extra docs python scripts/check_site_links.py quarto/_site
-      - name: Execute the downloadable beginner notebook
+      - name: Execute tutorials and build site
+        run: uv run --locked --extra docs python scripts/build_docs.py
+      - name: Check documentation links and saved notebook outputs
+        run: |
+          uv run --locked --extra docs python scripts/check_site_links.py quarto/_site
+          uv run --locked --extra docs python scripts/check_tutorial_notebook.py quarto/_site --outputs-only
+      - name: Rerun a downloaded notebook in a fresh directory
         run: uv run --locked --extra docs python scripts/check_tutorial_notebook.py quarto/_site/package/quickstart.ipynb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: executed-notebooks
+          path: quarto/_site/**/*.ipynb
+          if-no-files-found: error
       - uses: actions/upload-pages-artifact@v4
         with:
           path: quarto/_site
-  deploy:
+  publish-notebooks:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: published-notebooks
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: executed-notebooks
+          path: ${{ runner.temp }}/executed-notebooks
+      - name: Publish the notebooks used by Colab
+        env:
+          NOTEBOOK_SOURCE: ${{ runner.temp }}/executed-notebooks
+          NOTEBOOK_CHECKOUT: ${{ runner.temp }}/notebook-branch
+        run: |
+          python scripts/publish_notebooks.py "$NOTEBOOK_SOURCE" "$NOTEBOOK_CHECKOUT" --revision "$GITHUB_SHA"
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [build, publish-notebooks]
     runs-on: ubuntu-latest
     permissions:
       pages: write

@@ -1,36 +1,101 @@
 ---
-title: "Installation and development setup"
+title: "Install and run METIS"
 ---
 
-For research use, follow the [package quickstart](../package/quickstart.qmd).
-It creates a uv project and selects a PyTorch build for your machine. Python
-and Hydra call the same installed library; a source checkout is not required.
+## Try a notebook in Colab
 
-For development, install uv and Git, then:
+Open a [tutorial](../package/quickstart.qmd), choose **Open in Colab** under
+**Other Formats**, then **Runtime → Run all**. Its first cell uses uv to install
+the matching METIS revision and tutorial dependencies. The examples run on a
+CPU; no GPU or local installation is needed.
+
+Colab creates temporary runtimes, so a new session needs setup again. Re-running
+in an already prepared session skips installation. If Colab has already loaded
+a library that setup must replace, follow the cell's restart instruction once.
+See [Colab's explanation of runtime libraries](https://research.google.com/colaboratory/faq.html).
+
+## Install locally
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and Git,
+then create a project:
 
 ```bash
-git clone https://github.com/OJWatson/metis.git
-cd metis
-uv sync --locked --all-extras
-uv run --locked --all-extras pytest
-uv run --locked --all-extras ruff check src tests
-uv run --locked --all-extras ty check src
-uv build
+uv init my-surrogate --python 3.13
+cd my-surrogate
 ```
 
-The checkout selects CPU PyTorch on Linux/Windows and the platform build on
-Apple Silicon macOS. Intel Macs are unsupported by the current PyTorch range.
-The environment is `.venv`; manual activation is unnecessary. Keep
-`--all-extras` on checkout commands so synchronization retains optional features.
+On **Linux or Windows**, select CPU PyTorch:
 
-For CUDA, select a compatible named PyTorch index following the quickstart,
-update the local lockfile, then synchronize all extras again. Dependencies do
-not configure GPU drivers. GPU support is tested separately from CPU checks.
+```bash
+uv add "torch>=2.10,<3" --index pytorch-cpu=https://download.pytorch.org/whl/cpu
+```
 
-Select the project's `.venv` Python in a notebook interface. The Quarto CLI is
-installed separately; its Python dependencies are included in the docs extra.
-See [CONTRIBUTING.md](https://github.com/OJWatson/metis/blob/main/CONTRIBUTING.md)
-for distribution, notebook and automated handoff checks.
+In the generated `pyproject.toml`, set `explicit = true` on the named index so
+other dependencies use PyPI:
 
-Old source-checkout commands and raw checkpoints are explained in the
-[migration guide](../package/migration.qmd); they are not the current API.
+```toml
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+```
+
+On **Apple Silicon macOS**, use `uv add "torch>=2.10,<3"` instead. The current
+PyTorch range does not support Intel Macs.
+
+Add METIS with plotting support, then run the bundled example:
+
+```bash
+uv add "metis-surrogate[plots] @ git+https://github.com/OJWatson/metis.git"
+uv run metis demo --steps 100 --output metis-demo
+```
+
+This saves a model, metrics and predictions in `metis-demo/`. uv keeps your
+project's dependencies in `pyproject.toml`, resolved versions in `uv.lock`,
+and environment in `.venv`. Keep the first two with your analysis. Run scripts
+with `uv run python your_script.py`; no environment activation is necessary.
+
+The distribution is **metis-surrogate**, imported as **metis**. It is not yet
+on PyPI; the PyPI package named `metis` is unrelated. Python 3.11+ is supported.
+Optional extras are `plots`, `pandas`, `wandb` and `docs`; include the ones you
+need together in the dependency requirement.
+
+## Run downloaded notebooks
+
+Add the tutorial dependencies and JupyterLab to the same project:
+
+```bash
+uv add "metis-surrogate[docs] @ git+https://github.com/OJWatson/metis.git"
+uv add --dev jupyterlab
+uv run jupyter lab
+```
+
+Download **Jupyter** under a tutorial's **Other Formats**, save it in this project,
+and open it in JupyterLab. Its saved outputs are already visible; use **Run all**
+to regenerate them. In another notebook editor, select this project's `.venv`
+Python kernel. Keep any other extras you use in the `uv add` requirement.
+
+## Optional CUDA setup
+
+For NVIDIA GPUs, select an index compatible with your driver using the
+[uv PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/).
+For example, if CUDA 12.8 is appropriate:
+
+```bash
+uv add "torch>=2.10,<3" --index pytorch-cu128=https://download.pytorch.org/whl/cu128
+```
+
+Set `explicit = true` on the new `pytorch-cu128` index as above. This updates
+Python dependencies, not your NVIDIA driver. Check the result and train:
+
+```bash
+uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+uv run metis train model=mlp training.device=cuda
+```
+
+In Python, use `TrainingConfig(device="cuda")`.
+
+## Develop METIS
+
+See the [contributor guide](https://github.com/OJWatson/metis/blob/main/CONTRIBUTING.md)
+for the locked development environment, tests and executed documentation build.
