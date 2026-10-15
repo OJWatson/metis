@@ -4,3 +4,24 @@
 .page-columns {
   --mermaid-bg-color: transparent;
 }
+
+.quarto-alternate-formats .metis-colab {
+  margin-top: 0.45rem;
+}
+
+.quarto-alternate-formats .metis-colab-button {
+  display: inline-block;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid #d18b08;
+  border-radius: 0.25rem;
+  color: #5b3a00;
+  background: #fff6df;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.quarto-alternate-formats .metis-colab-button:hover,
+.quarto-alternate-formats .metis-colab-button:focus-visible {
+  background: #ffe5a8;
+  text-decoration: underline;
+}

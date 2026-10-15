@@ -10,7 +10,7 @@ parallelism and multi-node launching are not supplied by this interface.
 
 ## Configure devices
 
-After the [CUDA setup](../package/quickstart.qmd#optional-cuda-setup):
+After the [CUDA setup](../basics/installing_metis.qmd#optional-cuda-setup):
 
 ```bash
 uv run metis train training.device=cuda training.num_devices=4 training.batch_size=128

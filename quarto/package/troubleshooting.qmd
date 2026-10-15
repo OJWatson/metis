@@ -1,5 +1,5 @@
 ---
-title: "Troubleshooting and model choice"
+title: "Troubleshooting"
 ---
 
 | Symptom | First checks and actions |
@@ -11,7 +11,7 @@ title: "Troubleshooting and model choice"
 | Good transformer training loss, poor predictions | Inspect autonomous rollouts. Teacher-forced next-step loss can hide accumulating prediction errors. |
 | Good average, missing stochastic variability | A deterministic model cannot generate a conditional distribution. Compare flow matching or iTARFlow on distributional metrics. |
 | Negative counts or broken conservation | Inspect violation reports. The models do not enforce these rules. A support-aware model or transformation is a separate scientific decision. |
-| CUDA unavailable | Use `device="cpu"` or choose a compatible CUDA PyTorch index and driver using the quickstart. An installed CUDA wheel alone does not guarantee a usable GPU. |
+| CUDA unavailable | Use `device="cpu"` or choose a compatible CUDA PyTorch index and driver using the [installation guide](../basics/installing_metis.qmd#optional-cuda-setup). An installed CUDA wheel alone does not guarantee a usable GPU. |
 | Out of memory | Reduce batch size, width, sequence length or sample batch size as appropriate. The bank still needs RAM even though training uses device minibatches. |
 | Reloaded predictions differ | Use the complete artifact, same sampling seed and numerical settings. Old raw checkpoints lack preprocessing. |
 | Conditioning is missing or shape is wrong | Supply `(B,T,K)` original-unit values in `observed_outputs` order; do not pass changing data as static inputs. Evaluation banks need the full original output schema. |

@@ -2,130 +2,68 @@
 title: "Configure experiments with Hydra"
 ---
 
-Hydra and Python are two interfaces to the same package. Hydra composes objects
-and manages experiment configuration; `Surrogate` performs training, inference
-and persistence. The package does not have separate implementations for these
-workflows.
+Hydra gives you reusable configurations, command-line overrides and sweeps.
+It calls the same training and evaluation functions as the Python API.
 
-## Packaged configurations
+## Run a packaged configuration
+
+From your [uv project](../basics/installing_metis.qmd):
 
 ```bash
 uv run metis train --cfg job
 uv run metis train model=mlp training.steps=1000
-uv run metis-train model=flow_matching training.device=cpu training.batch_size=128
 ```
 
-Run these commands from the uv project created in the
-[quickstart](quickstart.qmd). Configurations are included in the wheel, so the
-project can live outside the METIS repository. Use `training.device=cuda` after
-the quickstart's CUDA setup to select an NVIDIA GPU.
-Model groups are `mlp`, `transformer`, `flow_matching` and `itarflow`. The default
-dataset is the bundled example. Dimensions are inferred from its schema.
+The first command shows the configuration; the second trains on the bundled
+SIRDS bank. Configurations ship inside METIS, so these commands work outside its
+source repository. `uv run metis-train` is an equivalent entry point.
 
-For your data:
+Choose `model=mlp`, `transformer`, `flow_matching` or `itarflow`. Dimensions are
+inferred from the data. For your own Parquet bank:
 
 ```bash
 uv run metis train dataset=parquet dataset.path=/absolute/path/bank.parquet 'dataset.inputs=[contact_rate,recovery_rate]' 'dataset.outputs=[incidence,prevalence]'
 ```
 
-A dataset factory can also return a `DatasetSplit` for explicitly prepared
-partitions. Hydra's `_target_` composition lets experienced users supply their
-own importable factory without replacing METIS's training loop. Relative
-Parquet paths are resolved from the launch directory, even with
-`hydra.job.chdir=true`.
+Each run saves a complete model, training history, evaluation metrics and resolved
+configuration in its Hydra output directory. Relative data paths resolve from
+the directory where you launch the command.
 
-## Sweeps
+## Compare settings
 
 ```bash
 uv run metis train --multirun model=mlp,transformer training.learning_rate=0.001,0.0003 evaluation.partition=validation
 ```
 
-Each run writes its resolved configuration, complete model, training history and
-evaluation metrics into its own directory. Changing a model changes its training
-objective; compare shared original-unit validation metrics instead of ranking
-unrelated training losses. After choosing the model/settings, assess the
-independent test bank once. Using test metrics to select a sweep winner would
-make those results tuning performance rather than a final test.
+This runs four experiments. Compare common original-unit validation scores,
+then evaluate your chosen model on the test bank. Different model families can
+use different training losses, so those losses are not a fair ranking.
 
-Set `plot.enabled=true` with the `[plots]` extra for a diagnostic figure. Add it
-to your project with
-`uv add "metis-surrogate[plots] @ git+https://github.com/OJWatson/metis.git"`,
-including any other extras you already use in the same requirement. A
-multirun job that still uses `evaluation.partition=test` emits a warning: it does
-not automatically change the partition or conceal evaluation choices.
+With the `[plots]` extra, add `plot.enabled=true` to save a diagnostic figure.
+See [model comparison](model-choice.qmd) for an executed example and
+[sweeps](../sweeping/overview.qmd) for larger searches.
 
-## Live Weights & Biases tracking {#live-tracking}
+## Track a run {#live-tracking}
 
-Tracking is optional and off by default. Install the `[wandb]` extra to stream
-training loss at every optimizer step, validation loss when evaluated, and final
-evaluation metrics. Hydra and Python use the same progress callback.
+With the `[wandb]` extra installed:
 
 ```bash
-uv add "metis-surrogate[wandb] @ git+https://github.com/OJWatson/metis.git"
-# Local tracking; no account, credentials, or network required:
 uv run metis train training.steps=100 wandb.enabled=true wandb.mode=offline
 ```
 
-If you also use plots or pandas tables, include those extras in the requirement,
-for example `[plots,pandas,wandb]`. uv records the selection, so tracking remains
-available on subsequent `uv run` calls.
+For online tracking, authenticate with `uv run wandb login` and set
+`wandb.mode=online wandb.project=my-study`. See [Weights & Biases](../sweeping/wandb.qmd)
+for installation, the Python adapter and what is logged.
 
-For an online run, authenticate with `uv run wandb login`, then select the project and,
-if appropriate, your user or team entity:
+## Customize the experiment
 
-```bash
-uv run metis train wandb.enabled=true wandb.project=my-surrogate-study wandb.entity=my-team
-```
-
-Do not put credentials in YAML or commit them to the repository. W&B manages
-authentication; METIS passes project settings to the installed W&B client.
-
-Tracking logs the supplied configuration and scalar training/evaluation metrics.
-It does **not** automatically upload simulation tables, predictions, or model
-files. Configurations may contain local data paths and column names. Local METIS
-model and evaluation artifacts are saved independently of tracking.
-
-The same adapter works in a notebook or script:
-
-```python
-from dataclasses import asdict
-from metis import load_example, Surrogate, TrainingConfig
-from metis.tracking import WandbTracker
-
-split = load_example().split(seed=42)
-config = TrainingConfig(steps=100, eval_every=20)
-with WandbTracker(
-    project="my-surrogate-study",
-    mode="offline",  # Change to online after configuring W&B authentication.
-    config={"model": "mlp", "training": asdict(config)},
-    dir="tracking",
-) as tracking:
-    surrogate = Surrogate("mlp").fit(
-        split.train, split.validation, config=config,
-        on_progress=tracking.log_training,
-    )
-    report = surrogate.evaluate(split.test)
-    tracking.log_evaluation(report, prefix="test")
-    surrogate.save("surrogate.pt")
-    report.save("evaluation.json")
-```
-
-The context closes runs on success or failure. `WandbTracker(enabled=False)` is
-a no-op and does not import or require W&B. A custom `on_progress` callback can
-instead update a dashboard or another logger; it receives a copied dictionary
-with `step`, `train_loss` and, on validation steps, `validation_loss`.
-
-## Training options and migration
-
-`training.*` exposes the same `TrainingConfig` fields as Python, including
-`schedule=warmup_cosine`, `precision=bf16`, `compile_model=true`, `num_devices`,
-checkpoint cadence and strict resume. Use [training](../basics/training.qmd),
-[distributed training](../utils/distributed-training.qmd) and
-[saving/resuming](../basics/saving-and-loading.qmd) for examples and constraints.
+`training.*` accepts the [TrainingConfig settings](api.qmd#trainingconfig),
+including device, learning-rate schedule and checkpoint resume. Use
+`training.device=cuda` after [CUDA setup](../basics/installing_metis.qmd#optional-cuda-setup).
 
 Transformer and flow matching accept `model.observed_outputs=[column,...]` for
-[sequence conditioning](conditioning.qmd). Keep those columns in `dataset.outputs`.
+[known sequence conditioning](conditioning.qmd). Keep those columns in `dataset.outputs`.
 
-Older root scripts/configs are retired. The [migration guide](migration.qmd)
-explains replacement fields and why historical weights need their original
-preprocessing implementation as well as the original simulation bank.
+For a custom split, a Hydra `_target_` factory can return a `DatasetSplit`.
+[Hydra composition](../basics/hydra.qmd) explains custom configuration files;
+[migration](migration.qmd) maps the original repository's settings to the package.

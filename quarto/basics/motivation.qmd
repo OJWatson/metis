@@ -1,45 +1,39 @@
 ---
-title: "Motivating surrogate modelling"
+title: "Why use a surrogate?"
 ---
 
-## Why surrogate modelling?
+Scientific simulators can be expensive to run. Tasks such as parameter fitting,
+sensitivity analysis and interactive dashboards may need thousands of runs,
+while one detailed agent-based simulation can take hours or days
+[@chopra2023differentiableagentbasedepidemiology].
 
-<!-- TODO: motivate the problem — expensive stochastic simulators, the need to
-run them many times (inference, sensitivity analysis, decision making). -->
-Many scientific disciplines are increasingly reliant on computational simulators which reproduce complex behaviours. However, these simulators are often slow and expensive to run, rendering tasks like scenario analysis, forecasting and parameter inference, difficult or otherwise impractical. For example, its been reported that a single forward simulation over a large COVID-19 Agent-Based Model like JUNE can take several days [@chopra2023differentiableagentbasedepidemiology]. Surrogate models serve as cost-effective approximations of these systems. Whilst surrogates have been implemented with techniques like nonparametric statistical methods and splines, modern neural network approaches offer significantly greater flexibility and are often more performant.
+A **surrogate** learns to approximate a simulator from a bank of completed
+runs. Once trained, it can produce new predictions much faster.
 
-::: {.callout-tip}
-For an overview of the surrogate modelling process and a reporting standard for surrogates, see SMRS [@NEURIPS2025_3e1d8e89].
-:::
+## Where METIS fits
 
+METIS provides four neural surrogate models and the tools to train, compare
+and save them. You bring simulator inputs and output trajectories; METIS helps
+you turn them into a reusable model through Python or Hydra.
 
+The usual workflow is:
 
-<!-- - Covid agent-based models (ABMs) as a real-world example of an expensive
-  stochastic simulator. -->
+1. Prepare a bank covering the inputs you care about.
+2. Train on part of the bank.
+3. Compare predictions with simulations the model has not seen.
+4. Save the surrogate and use it for new inputs.
 
-## Introducing METIS
+A fast surrogate is useful only if it reproduces the quantities your study
+needs. Check errors, stochastic variation and physical constraints before
+using it for decisions or inference. The
+[model comparison guide](../package/model-choice.qmd) shows where to start;
+SMRS provides a broader reporting standard [@NEURIPS2025_3e1d8e89].
 
-METIS is an installable Python library for neural surrogates of time-series
-simulators, with equivalent Python and Hydra entry points. Prepare a validated
-bank, select a model and training settings, inspect held-out predictions, then
-save the model for reuse. Hydra records configuration and supports command-line
-overrides and sweeps. The package supplies engineering checks and common
-diagnostics; defining valid inputs, scientific outcomes and acceptable errors
-remains part of the modelling work. Start with the
-[quickstart](../package/quickstart.qmd) and [own-bank exercise](../package/own-bank.qmd).
+Start with the [quickstart](../package/quickstart.qmd), or meet the
+[SIRDS simulator](sirds-example.qmd) used in the examples.
 
-<!-- TODO: position METIS.
-
-- METIS as a set of configurable "recipes" for building surrogates. -->
-
-
-::: {.callout-important}
-METIS is designed to be useful to those without deep learning expertise, however, it will be beneficial to have some basic familiarity with neural networks and their training. If you're unfamiliar or feeling a bit rusty these resources should be helpful:
-
-* [But what is a neural network? (YouTube)](https://youtu.be/aircAruvnKk?si=dVRKEs7pTgZWgNUm)
-* [Introduction to Machine Learning (Online Notes)](https://clairedavid.github.io/intro_to_ml/nn/nn_0_intro.html)
-* [Understanding Deep Learning (Textbook)](https://udlbook.github.io/udlbook/)
-
-
-
+::: {.callout-tip title="New to neural networks?"}
+Basic Python is enough to run the examples. For background, try
+[3Blue1Brown's introduction](https://youtu.be/aircAruvnKk) or the freely available
+[Understanding Deep Learning](https://udlbook.github.io/udlbook/) textbook.
 :::

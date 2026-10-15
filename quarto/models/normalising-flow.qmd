@@ -1,20 +1,98 @@
 ---
-title: "Normalising Flow"
+title: "Normalising flow"
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
+execute:
+  eval: true
 ---
 
-The normalising flow model is a stochastic surrogate with efficiently computable exact density.
+The iTARFlow surrogate generates stochastic trajectories and evaluates their
+continuous probability density. This makes it useful when you need both samples
+and a surrogate likelihood for [parameter inference](../sbi/vi-mcmc.qmd).
+It currently accepts static inputs only.
 
-## When this might be a good fit
+## Try it
 
+This small continuous-valued example uses 40 parameter settings, four
+realisations per setting and eight time points. The response is
+$y(t)=\theta(1+\sin t)+0.3\cos t+\epsilon$, with independent
+$\epsilon\sim N(0,0.08^2)$. The known mean lets us see what the surrogate learns.
+This is a short teaching fit, not a benchmark of the model families.
 
-The normalising flow surrogate is a good option when stochasticity and/or evaluating the exact density of the surrogate is needed. Access to this density enables the surrogate to be used in parameter inference pipelines like MCMC, Variational Inference or Simulation-Based Inference (SBI).
+```{python}
+#| code-fold: true
+#| code-summary: "Create the example bank"
+import numpy as np
+import matplotlib.pyplot as plt
+from metis import SimulationDataset, Surrogate, TrainingConfig
 
-Architecturally it is implemented as a Transformer Autoregressive Flow (TARFlow), which is a modern normalising flow design that composes transformer blocks into an end-to-end invertible architecture. Its typical training cost is somewhere between the transformer surrogate and the flow matching model and its inference cost is similar to the flow matching model. The public iTARFlow API currently supports static inputs only.
+rng = np.random.default_rng(7)
+times = np.linspace(0, 2, 8)
+inputs = np.repeat(np.linspace(0.2, 1.2, 40)[:, None], 4, axis=0)
+mean = inputs[:, None, :] * (1 + np.sin(times)[None, :, None])
+mean = mean + 0.3 * np.cos(times)[None, :, None]
+outputs = mean + rng.normal(0, 0.08, mean.shape)
+bank = SimulationDataset.from_arrays(
+    inputs, outputs, input_names=["theta"], output_names=["response"], times=times,
+)
+split = bank.split(seed=42)
+```
 
-<!-- TODO: the kinds of problems an iTarFlow surrogate suits; note the exact
-likelihood, which matters for the SBI section. -->
+```{python}
+model = Surrogate(
+    "itarflow",
+    model_options={"channels": 32, "num_blocks": 2, "num_layers": 1, "num_heads": 2},
+).fit(
+    split.train, split.validation,
+    config=TrainingConfig(steps=300, batch_size=32, eval_every=50, seed=42),
+)
+```
 
-## How Normalising Flows work
+Generate 100 trajectories at one held-out parameter setting. The shaded band
+shows pointwise 5th–95th percentiles of these draws; it represents the fitted
+model's variability, not uncertainty in its fitted weights.
+
+```{python}
+theta = split.test.inputs[:1]
+draws = model.sample(theta, n_samples=100, seed=13)[0, :, :, 0]
+expected = theta[0, 0] * (1 + np.sin(times)) + 0.3 * np.cos(times)
+print("Draws × time points:", draws.shape)
+```
+
+```{python}
+#| code-fold: true
+#| code-summary: "Plot generated trajectories"
+#| fig-cap: "iTARFlow: short CPU fit on the synthetic continuous bank. The shaded band contains the middle 90% of surrogate draws at each time."
+low, high = np.quantile(draws, [0.05, 0.95], axis=0)
+fig, ax = plt.subplots(figsize=(6, 3.5))
+ax.fill_between(times, low, high, alpha=0.25, label="Surrogate 90% band")
+ax.plot(times, draws[:8].T, color="C0", alpha=0.15, linewidth=0.7)
+ax.plot(times, draws.mean(axis=0), color="C0", label="Surrogate sample mean")
+ax.plot(times, expected, "--", color="black", label="Known mean")
+ax.plot(times, split.test.outputs[0, :, 0], "o", color="C1", label="Held-out realisation")
+ax.set(xlabel="Time", ylabel="Response")
+ax.legend(fontsize=8)
+fig.tight_layout()
+plt.show()
+```
+
+For a real bank, assess coverage over many held-out settings using the
+[evaluation tools](../package/evaluation.qmd).
+
+The density is also available in the original output units:
+
+```{python}
+log_density = model.log_prob(theta, split.test.outputs[:1])
+print("Log density of the held-out trajectory:", log_density[0])
+```
+
+This is the fitted flow's density, not the simulator's exact likelihood or the
+probability of a particular integer count.
+
+## How it works
 
 ### Maximum likelihood via change of variables
 A Normalising Flow parametrises an invertible transformation $f_{\theta}$ from the data distribution $p_{\mathrm{data}}$ to a noise distribution $p_0$ (usually Gaussian). Once trained the network can be inverted to transform noise samples into data. This transformation also has an associated density $p_{\mathrm{model}}$ which is accessible via the change of variable formula
@@ -54,36 +132,20 @@ x^{\mathrm{input}}_{i}=(x^{\mathrm{output}}_{i}\odot\exp(\alpha_i))+\mu_i
 $$
 
 
-:::{.callout-warning}
-Normalising Flows are known to struggle with numerical issues on high dimensional data like images. To overcome this, @tarflow train on noise-augmented data, and apply *Tweedie's trick* to produce clean samples at inference. The downside of this approach is substantially more expensive inference and the loss of exact density evaluation.
+Flow models can become numerically unstable on some datasets. METIS does not
+apply the noise augmentation and Tweedie denoising used in the image experiments
+of @tarflow; inspect samples and held-out densities on your own bank.
 
-In Metis we have not implemented this as the original authors reported no such issue in their experiments on two malaria simulators; this is not a guarantee for a new bank.
-:::
+## Change its size
 
+`channels` controls width, `num_blocks` the number of invertible blocks, and
+`num_layers` the transformer layers per block. `num_heads` controls attention
+heads and `num_static_tokens` controls static-input conditioning tokens.
+The default uses width 64, two blocks, two layers and four heads/static tokens.
 
-
-## Configuring an iTarFlow model
-
-The normalising flow is configured via these variables:
-
-* `channels`: The width of the network
-* `patch_size`: The number of timesteps per sequence element processed by the model. Defaults to `1`, increasing it reduces the length of the sequence the model has to process at potentially the cost of some performance.
-* `num_blocks`: Number of TARFlow blocks
-* `num_layers`: Number of layers per TARFlow block
-* `num_heads`: Number of attention heads
-* `num_static_tokens`: Number of tokens used for conditioning on the static input
-
-
-The installed `model=itarflow` preset uses `channels=64`, `num_layers=2`,
-`num_blocks=2`, `num_heads=4`, `num_static_tokens=4`, `patch_size=1`.
-The sequence length must be divisible by `patch_size` and the channel width must
-be compatible with the attention heads. Data dimensions are inferred.
+`patch_size` groups consecutive time points into one token. The default is one;
+larger values reduce the sequence length but require a divisible time grid.
 
 ```bash
 uv run metis train model=itarflow model.model_options.channels=128
 ```
-
-Use `Surrogate("itarflow", model_options={"channels": 128})` in Python.
-The [likelihood exercise](../sbi/vi-mcmc.qmd) demonstrates density values and
-parameter gradients in original units. The density is exact for the fitted
-continuous flow, not the simulator's unknown likelihood or a count probability.

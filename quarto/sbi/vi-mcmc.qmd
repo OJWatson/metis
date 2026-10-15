@@ -1,85 +1,128 @@
 ---
 title: "A differentiable surrogate likelihood"
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
+execute:
+  eval: true
 ---
 
-This small CPU exercise checks the connection between an iTARFlow surrogate and
-a caller's parameter-fitting code. It trains on a synthetic continuous bank,
-saves/reloads the model, evaluates one held-out trajectory, and checks a finite
-gradient. It does not fit a posterior or validate a scientific observation model.
+An iTARFlow model can evaluate $\log p(y\mid\theta)$ and differentiate it with
+respect to simulator inputs $\theta$. That is the link to parameter-fitting
+methods such as MCMC or variational inference.
 
-## Run the complete example
+This notebook fits a small synthetic example, plots its learned likelihood and
+calculates a gradient. It does not fit a posterior.
 
-In a METIS checkout with the development environment from
-[installation](../basics/installing_metis.qmd):
+## Train on simulated responses
 
-```bash
-uv run --locked --all-extras python examples/surrogate_likelihood.py --steps 20 --output likelihood-example
-```
+Our simulator has six time points: $y(t)=\theta(1+t)+\epsilon_t$, with independent
+$\epsilon_t\sim N(0,0.1^2)$. We simulate three replicates at each of 40 parameter
+settings, then hold out complete settings for validation and testing.
 
-Or save [surrogate_likelihood.py](https://github.com/OJWatson/metis/blob/main/examples/surrogate_likelihood.py)
-in your own installed uv project and run
-`uv run python surrogate_likelihood.py --steps 20 --output likelihood-example`.
-The example uses 24 parameter settings, three replicates and six timepoints,
-with independent Gaussian noise added to a simple parameter-dependent response.
-The short fit is an interface check, not evidence of likelihood accuracy.
-
-## Use original units and preserve gradients
-
-After loading the example artifact:
-
-```python
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
 import torch
-from metis import Surrogate
+from metis import SimulationDataset, Surrogate, TrainingConfig
 
-model = Surrogate.load("likelihood-example/model.pt")
-theta = torch.tensor([[0.5]], requires_grad=True)
-# Supply your observed six-timepoint trajectory in the fitted response units.
-observed = torch.tensor([[[0.5], [1.0], [1.5], [2.0], [2.5], [3.0]]])
-log_likelihood = model.log_prob_tensor(theta, observed)
-gradient, = torch.autograd.grad(log_likelihood.sum(), theta)
-print(log_likelihood.detach(), gradient)
+rng = np.random.default_rng(7)
+times = np.arange(6, dtype=float)
+inputs = np.repeat(np.linspace(0.1, 0.9, 40)[:, None], 3, axis=0)
+outputs = inputs[:, None, :] * (1 + times[None, :, None])
+outputs = outputs + rng.normal(0, 0.1, outputs.shape)
+bank = SimulationDataset.from_arrays(
+    inputs, outputs, input_names=["theta"], output_names=["response"], times=times,
+)
+split = bank.split(seed=42)
+model = Surrogate("itarflow", model_options={
+    "channels": 32, "num_layers": 1, "num_blocks": 2, "num_heads": 2,
+}).fit(
+    split.train, split.validation,
+    config=TrainingConfig(steps=300, batch_size=32, eval_every=50, seed=42),
+)
 ```
 
-Inputs have shape `(batch, parameters)`, outputs `(batch, time, channels)` and
-log densities `(batch,)`. The saved scaling is applied inside the method,
-including its change-of-variables Jacobian. Do not manually normalize inputs
-or observations first. `log_prob` provides the corresponding NumPy interface
-when gradients are unnecessary.
+## Inspect the likelihood
 
-## Where Bayesian inference would begin
+Take one held-out trajectory and evaluate its density at a range of candidate
+inputs. In this synthetic example we also know the simulator's Gaussian density,
+so we can compare the two curves directly.
 
-For simulator parameters $\phi$, observed data $y$ and a separately chosen prior
-$p(\phi)$, an approximate posterior could be defined by
+```{python}
+observation = split.test.outputs[:1]
+true_theta = float(split.test.inputs[0, 0])
+candidates = np.linspace(split.train.inputs.min(), split.train.inputs.max(), 200)
+repeated_observation = np.repeat(observation, len(candidates), axis=0)
+learned = model.log_prob(candidates[:, None], repeated_observation)
+residual = observation[0, :, 0] - candidates[:, None] * (1 + times)
+known = -0.5 * np.sum((residual / 0.1) ** 2 + np.log(2 * np.pi * 0.1**2), axis=1)
+```
+
+```{python}
+#| code-fold: true
+#| code-summary: "Plot the observation and likelihood curves"
+#| fig-cap: "iTARFlow trained on the synthetic Gaussian-response bank. Both log-density curves are shifted to their own maximum for a shape comparison; these are likelihoods, not posterior distributions."
+fig, axes = plt.subplots(1, 2, figsize=(10, 3.5))
+axes[0].plot(times, observation[0, :, 0], "o", label="Held-out observation")
+axes[0].plot(times, true_theta * (1 + times), "--", label="Simulator mean")
+axes[0].set(xlabel="Time", ylabel="Response")
+axes[0].legend()
+axes[1].plot(candidates, learned - learned.max(), label="Surrogate")
+axes[1].plot(candidates, known - known.max(), "--", label="Known Gaussian model")
+axes[1].axvline(true_theta, color="grey", linestyle=":", label="Generating theta")
+axes[1].set(xlabel="Candidate theta", ylabel="Log density minus maximum", ylim=(-15, 1))
+axes[1].legend(fontsize=8)
+fig.tight_layout()
+plt.show()
+```
+
+The rendered short fit has a much heavier right tail than the known likelihood.
+That would distort parameter inference even though the response trajectories
+look plausible. Validate likelihood shape and calibration before using a
+surrogate for inference; accurate mean predictions alone are not enough.
+
+## Differentiate in original units
+
+`log_prob_tensor` keeps the computation connected to PyTorch's automatic
+differentiation. The saved scalers and the density's change-of-variables
+correction are applied internally.
+
+```{python}
+theta = torch.tensor([[true_theta]], dtype=torch.float32, requires_grad=True)
+observed = torch.tensor(observation.copy())
+log_density = model.log_prob_tensor(theta, observed)
+gradient, = torch.autograd.grad(log_density.sum(), theta)
+print("Log density:", log_density.detach().tolist())
+print("Derivative with respect to theta:", gradient.tolist())
+```
+
+## From likelihood to inference
+
+With observed data $y$ and a separately chosen prior $p(\theta)$, an approximate
+posterior would be
 
 $$
-p(\phi\mid y)\propto p_{\mathrm{surrogate}}(y\mid\phi)\,p(\phi).
+p(\theta\mid y)\propto p_{\mathrm{surrogate}}(y\mid\theta)p(\theta).
 $$
 
-The neural weights are fitted point estimates. Sampling the surrogate models
-simulation variability; it does not integrate over uncertainty in those weights
-or account for surrogate discrepancy. A deterministic surrogate combined with
-an observation-error likelihood is a different model and must be specified as
-such. Counts, exact constraints and real observations may require an explicit
-observation model before this continuous density is meaningful.
-
-Variational inference chooses a tractable distribution $q_\psi(\phi)$ and
-optimizes an approximation such as the evidence lower bound,
+MCMC samples this target. Variational inference instead fits a tractable
+approximation $q_\psi(\theta)$, for example by maximizing
 
 $$
 \mathcal L(\psi)=\mathbb E_{q_\psi}\left[
-\log p_{\mathrm{surrogate}}(y\mid\phi)+\log p(\phi)-\log q_\psi(\phi)
+\log p_{\mathrm{surrogate}}(y\mid\theta)+\log p(\theta)-\log q_\psi(\theta)
 \right].
 $$
 
-MCMC instead constructs a chain with the specified posterior as its stationary
-distribution. Neither method repairs an inaccurate surrogate likelihood,
-unsupported parameter regions or non-identifiability. Before implementing an
-inference study, choose the prior and observation process, assess held-out
-likelihood/calibration and surrogate sensitivity, then plan convergence,
-identifiability and posterior predictive checks. These are future scientific
-choices; this tutorial adds none automatically.
+The neural weights here are point estimates. Surrogate draws represent learned
+simulation variability, not uncertainty in those weights. Real observations,
+integer counts or measurement error may need an observation model before this
+continuous density is suitable. Keep inference inside the validated input
+region, and check identifiability, convergence and posterior predictions.
 
-The original long VI/MCMC demonstration is available in the
-[immutable source archive](https://github.com/OJWatson/metis/blob/739d57cdaa5f74b9a0973c527f063eaa3a72ab06/quarto/sbi/vi-mcmc.qmd).
-Its raw-checkpoint and preprocessing recipe is historical. Follow the
-[migration guidance](../package/migration.qmd) before reusing old weights.
+The [historical VI/MCMC recipe](https://github.com/OJWatson/metis/blob/739d57cdaa5f74b9a0973c527f063eaa3a72ab06/quarto/sbi/vi-mcmc.qmd)
+shows a longer application using the former API. See
+[migration](../package/migration.qmd) before reusing its checkpoints.

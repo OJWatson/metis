@@ -1,68 +1,114 @@
 ---
-title: "Condition on an observed trajectory"
+title: "Supply a known trajectory"
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
+execute:
+  eval: true
 ---
 
-A static input is one value per realization. An observed sequence is a value
-per timepoint known at prediction time, such as a prescribed intervention or
-an externally supplied environmental trajectory. Do not put a changing sequence
-in the static-input columns.
+Some simulators depend on a changing input, such as an intervention schedule or
+an environmental trajectory. Keep it as a sequence, then tell METIS that it will
+be **supplied at prediction time**. For local setup, see
+[installation](../basics/installing_metis.qmd).
 
-## Bank and model schema
+## Build a bank with observed and predicted channels
 
-Keep both observed and predicted channels in the bank's output schema, then
-name the observed channels when constructing the model:
+This toy simulator starts at $s_0=0$ and follows
+$s_t=0.8s_{t-1}+g f_{t-1}$. The static input is gain $g$; the known path $f_t$
+switches from 0 to 1 at a scenario-specific time. The transformer must predict
+`stock` from `gain` and the history of `forcing`.
 
-```python
+```{python}
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+
 from metis import SimulationDataset, Surrogate, TrainingConfig
-bank = SimulationDataset.from_parquet(
-    "conditioned_bank.parquet", inputs=["contact_rate"],
-    outputs=["intervention", "incidence"],
+
+torch.set_num_threads(2)
+times = np.arange(12)
+inputs, outputs, groups = [], [], []
+for gain in np.linspace(0.5, 1.5, 20):
+    for switch_time in (2, 4, 6, 8):
+        forcing = (times >= switch_time).astype(float)
+        stock = np.zeros(len(times))
+        for t in range(1, len(times)):
+            stock[t] = 0.8 * stock[t - 1] + gain * forcing[t - 1]
+        inputs.append([gain])
+        outputs.append(np.column_stack([forcing, stock]))
+        groups.append((gain, switch_time))
+
+bank = SimulationDataset.from_arrays(
+    inputs, outputs, input_names=["gain"], output_names=["forcing", "stock"],
+    times=times, group_keys=groups,
 )
 split = bank.split(seed=42)
-model = Surrogate("transformer", observed_outputs=["intervention"]).fit(
-    split.train, split.validation, config=TrainingConfig(steps=500),
+print(f"{len(bank)} scenarios; outputs: {bank.output_names}")
+```
+
+`group_keys` keep each gain/schedule scenario together. For a stochastic bank,
+use the same scenario key for all of its replicates.
+
+## Train a conditioned model
+
+Both channels belong in the bank. Naming `forcing` in `observed_outputs` means
+it is supplied to the model; only `stock` is predicted and scored.
+
+```{python}
+model = Surrogate(
+    "transformer", observed_outputs=["forcing"],
+    model_options={"n_layer": 1, "n_embd": 32},
+).fit(
+    split.train, split.validation,
+    config=TrainingConfig(steps=750, eval_every=75, seed=42),
 )
+report = model.evaluate(split.test)
+report.by_output.to_pandas().round(3)
 ```
 
-The bank still needs complete, aligned time grids and disjoint scenario groups.
-The model learns to predict the remaining channels. In the example its output
-is `incidence`; `intervention` is supplied, not generated. MLP and iTARFlow do
-not support observed-sequence conditioning.
+## Predict with the known path
 
-## Prediction and sampling
+The conditioning array has shape `(input settings, timepoints, observed channels)`.
+Here it is `(1, 12, 1)`. It uses the original units and the declared channel order.
 
-```python
-prediction = model.predict(
-    {"contact_rate": 0.4}, conditioning=known_intervention,
-)
+```{python}
+i = 0
+known_path = split.test.outputs[i:i + 1, :, :1]
+query = {"gain": float(split.test.inputs[i, 0])}
+prediction = model.predict(query, conditioning=known_path)
+print("Conditioning shape:", known_path.shape)
+print("Prediction shape:", prediction.shape)
+print("Predicted channels:", model.output_names)
 ```
 
-`known_intervention` has shape `(input settings, fitted timepoints, observed
-channels)`, here `(1, T, 1)`, in original units. Its channel order follows the
-`observed_outputs` declaration. Prediction returns `(B,T,C_predicted)`.
-For `Surrogate("flow_matching", observed_outputs=[...])`, use
-`sample(inputs, conditioning=known_sequence, n_samples=100, seed=42)` to obtain
-`(B,S,T,C_predicted)`. The portable artifact preserves the conditioning schema
-and scaling. Missing or incompatible shapes fail validation; an array cannot reveal
-a mistaken channel order, so preserve the declared order yourself.
-
-Hydra uses the same constructor:
-
-```bash
-uv run metis train dataset=parquet dataset.path=conditioned_bank.parquet 'dataset.inputs=[contact_rate]' 'dataset.outputs=[intervention,incidence]' model=transformer 'model.observed_outputs=[intervention]'
+```{python}
+#| label: fig-conditioning-test
+#| fig-cap: "Conditioned transformer fitted to the synthetic gain/schedule training partition: supplied forcing and predicted stock for the first held-out test scenario."
+fig, axes = plt.subplots(2, 1, figsize=(8, 5), sharex=True)
+axes[0].step(times, known_path[0, :, 0], where="post", color="C1", label="Supplied forcing")
+axes[0].set(ylabel="Forcing", title=f"Held-out gain = {query['gain']:.2f}")
+axes[0].legend()
+axes[1].plot(times, split.test.outputs[i, :, 1], label="Simulator stock")
+axes[1].plot(times, prediction[0, :, 0], "--", label="Surrogate stock")
+axes[1].set(xlabel="Time", ylabel="Stock")
+axes[1].legend()
+fig.tight_layout()
+plt.show()
 ```
 
-## Information available at prediction time
+This short fit misses the initial zero-stock period and accumulates errors during
+rollout. The input handling works, but these predictions are not yet faithful
+enough to reuse. Check full generated paths, rather than treating a low training
+loss as proof of accuracy; see [model comparison](model-choice.qmd).
 
-The autoregressive transformer uses causal attention. Flow matching processes
-a full trajectory jointly, and its outputs can depend on the supplied sequence
-as a whole. It is suitable for generation conditional on a known full path;
-do not present this as forecasting based only on observations available so far.
-Always define which quantities are known in the intended application. Held-out
-evaluation cannot repair conditioning information that would be unavailable
-when the model is deployed.
+The transformer uses observed history **strictly before** each predicted time.
+Flow matching also supports `observed_outputs`, but can use the entire supplied
+path; that is generation conditional on a known schedule, not forecasting from
+past observations alone. MLP and iTARFlow do not support sequence conditioning.
 
-`model.evaluate(test_bank)` takes the same full output schema used during fit.
-It extracts observed channels from each held-out run and scores only predicted
-channels. The test claim is conditional performance given that supplied path;
-it is not performance when that path is unknown.
+The conditioning names and scaling are included when you
+[save the model](deployment.qmd). In a real application, only supply quantities
+that will actually be known when you make predictions.

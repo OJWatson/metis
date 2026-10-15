@@ -122,7 +122,7 @@ Evaluation supplies those channels as conditioning and scores predicted channels
 metrics require at least two samples; changing batch size changes Monte Carlo draws.
 
 The report exposes `metrics` (aggregate dictionary), `by_output` and `by_group`
-(Polars tables), and `provenance`. `to_dict()` serializes a report;
+(Polars tables), and `metadata`. `to_dict()` serializes a report;
 `save(path)` writes JSON; `worst_groups(n=10)` ranks group RMSE;
 `plot(output=None, max_runs=4)` requires the `[plots]` extra. Metrics include
 MAE/RMSE, replicate-mean error when supported, and stochastic empirical CRPS,

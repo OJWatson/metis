@@ -1,49 +1,48 @@
 ---
-title: "Save predictions and resume interrupted training"
+title: "Save a model or resume training"
 ---
 
-METIS has two deliberately different artifacts. An **inference artifact** is
-for prediction in another process. A **training checkpoint** additionally
-records the optimizer and random state needed to resume an interrupted job.
+Save an **inference artifact** to reuse a fitted model. Use a **training
+checkpoint** to continue an interrupted fit.
 
-## Portable inference
+## Reuse a fitted model
+
+After training `model` in the [quickstart](../package/quickstart.qmd):
 
 ```python
 from metis import Surrogate
+
 model.save("surrogate.pt")
 restored = Surrogate.load("surrogate.pt", device="cpu")
-predictions = restored.predict({"contact_rate": 0.4, "recovery_rate": 0.1})
+predictions = restored.predict(new_inputs)
 ```
 
-Input names in this example must match your fitted schema. The artifact includes
-weights, architecture, scalers, time grid and provenance. It needs no simulation
-bank at prediction time. Calling `fit` starts a fitting operation; use the
-explicit resume option below to continue an interrupted one.
+`new_inputs` uses the fitted input names or column order. The artifact contains
+the weights, architecture, scalers and time grid; you do not need the original
+simulation bank to make predictions. See [deployment](../package/deployment.qmd)
+for a complete save/load example.
 
-## Training checkpoints
+## Resume an interrupted run
+
+Enable checkpoints at the start of a long run:
 
 ```bash
 uv run metis train training.steps=10000 training.checkpoint_every=500 training.checkpoint_dir=/absolute/path/checkpoints/run-a
 ```
 
-Replace `/absolute/path` with a real location. A relative Hydra checkpoint
-directory lives under that job's output directory; a relative `resume_from` path
-is resolved from the launch directory. Absolute paths remove this ambiguity.
-The directory receives `last.pt` at the requested cadence and at completion,
-and `best.pt` when validation selects better weights. To resume an interrupted
-run, repeat the original data/model/training settings and add the checkpoint:
+Replace the path with your own directory. METIS writes `last.pt` at the requested
+interval and at completion, and updates `best.pt` when validation improves.
+To resume, repeat the original settings and add:
 
 ```bash
 uv run metis train training.steps=10000 training.checkpoint_every=500 training.checkpoint_dir=/absolute/path/checkpoints/run-a training.resume_from=/absolute/path/checkpoints/run-a/last.pt
 ```
 
-`steps` is the **original total**, not a count of additional steps. Resume
-requires the original model, bank identities, schemas, scalers, optimizer,
-schedule, seed, precision and device topology. Only checkpoint location,
-cadence and resume path may change. METIS rejects incompatible continuation
-rather than silently interpreting a checkpoint under a different experiment.
+`steps` remains the original total. The bank, model, optimizer settings and
+device topology must match; METIS checks them before continuing. Checkpoint
+location and frequency may change.
 
-The same fields are available in `TrainingConfig` for Python. Training
-checkpoints are not accepted by `Surrogate.load`; keep the inference artifact
-saved after fitting for deployment. Pre-package raw checkpoints lack essential
-preprocessing metadata: see [migration](../package/migration.qmd).
+In Python these are fields of `TrainingConfig`. A training checkpoint includes
+optimizer and random states and is not accepted by `Surrogate.load`; save the
+finished inference artifact separately. For older raw checkpoints, see
+[migration](../package/migration.qmd).

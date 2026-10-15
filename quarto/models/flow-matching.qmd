@@ -1,21 +1,96 @@
 ---
-title: "Flow Matching"
+title: "Flow matching"
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
+execute:
+  eval: true
 ---
-The flow matching transformer model is a flexible and stochastic surrogate.
 
+Flow matching generates stochastic trajectories. It starts from random noise
+and gradually transforms it into an output conditioned on the simulator inputs.
+Use it when the variability between simulations matters, not just their average.
 
-## When this might be a good fit
+It supports static inputs and full observed sequences. With sequence conditioning,
+it uses the whole supplied path; this is conditional generation rather than a
+causal forecast.
 
-The flow matching surrogate is a good option when stochasticity is needed. Architecturally, it is implemented as a modified transformer and also supports static and sequence conditioning.
+## Try it
 
-## How flow matching works
+This small continuous-valued example uses 40 parameter settings, four
+realisations per setting and eight time points. The response is
+$y(t)=\theta(1+\sin t)+0.3\cos t+\epsilon$, with independent
+$\epsilon\sim N(0,0.08^2)$. The known mean lets us see what the surrogate learns.
+This is a short teaching fit, not a benchmark of the model families.
 
-### Architecture
+```{python}
+#| code-fold: true
+#| code-summary: "Create the example bank"
+import numpy as np
+import matplotlib.pyplot as plt
+from metis import SimulationDataset, Surrogate, TrainingConfig
+
+rng = np.random.default_rng(7)
+times = np.linspace(0, 2, 8)
+inputs = np.repeat(np.linspace(0.2, 1.2, 40)[:, None], 4, axis=0)
+mean = inputs[:, None, :] * (1 + np.sin(times)[None, :, None])
+mean = mean + 0.3 * np.cos(times)[None, :, None]
+outputs = mean + rng.normal(0, 0.08, mean.shape)
+bank = SimulationDataset.from_arrays(
+    inputs, outputs, input_names=["theta"], output_names=["response"], times=times,
+)
+split = bank.split(seed=42)
+```
+
+```{python}
+model = Surrogate(
+    "flow_matching",
+    model_options={"n_blocks": 1, "n_head": 2, "n_kv_head": 2, "embd_dim": 32},
+).fit(
+    split.train, split.validation,
+    config=TrainingConfig(steps=300, batch_size=32, eval_every=50, seed=42),
+)
+```
+
+Generate 100 trajectories at one held-out parameter setting. The shaded band
+shows pointwise 5th–95th percentiles of these draws; it represents the fitted
+model's variability, not uncertainty in its fitted weights.
+
+```{python}
+theta = split.test.inputs[:1]
+draws = model.sample(theta, n_samples=100, seed=13, num_steps=30, solver="heun")[0, :, :, 0]
+expected = theta[0, 0] * (1 + np.sin(times)) + 0.3 * np.cos(times)
+print("Draws × time points:", draws.shape)
+```
+
+```{python}
+#| code-fold: true
+#| code-summary: "Plot generated trajectories"
+#| fig-cap: "Flow matching: short CPU fit on the synthetic continuous bank. The shaded band contains the middle 90% of surrogate draws at each time."
+low, high = np.quantile(draws, [0.05, 0.95], axis=0)
+fig, ax = plt.subplots(figsize=(6, 3.5))
+ax.fill_between(times, low, high, alpha=0.25, label="Surrogate 90% band")
+ax.plot(times, draws[:8].T, color="C0", alpha=0.15, linewidth=0.7)
+ax.plot(times, draws.mean(axis=0), color="C0", label="Surrogate sample mean")
+ax.plot(times, expected, "--", color="black", label="Known mean")
+ax.plot(times, split.test.outputs[0, :, 0], "o", color="C1", label="Held-out realisation")
+ax.set(xlabel="Time", ylabel="Response")
+ax.legend(fontsize=8)
+fig.tight_layout()
+plt.show()
+```
+
+For a real bank, assess coverage over many held-out settings using the
+[evaluation tools](../package/evaluation.qmd).
+
+## How it works
 The flow matching surrogate is parametrised with a *non-causal* transformer that processes the entire sequence in parallel.
 
 ### Flow Matching
 
-Flow Matching and Diffusion models are the current state-of-the-art learning algorithms for continuous valued data (e.g. images, protein-structure prediction). In brief, these models learn time-varying velocity fields which can be used to transport a sample of pure noise (e.g. from a Gaussian) to the data distribution. In order to generate samples the time-varying velocity field $v_{\theta}$ must be integrated over time $t$ to transport a noise sample $x_0$ to the data distribution:
+Flow matching models learn time-varying velocity fields which can be used to transport a sample of pure noise (e.g. from a Gaussian) to the data distribution. In order to generate samples the time-varying velocity field $v_{\theta}$ must be integrated over time $t$ to transport a noise sample $x_0$ to the data distribution:
 $$
 x_{\mathrm{pred}} = x_0+\int_{t=0}^{t=1}v_{\theta}(x_t|c)dt\text{, where } c \text{ is conditioning (i.e. surrogate inputs)}
 $$
@@ -36,39 +111,18 @@ Diffusion models have equivalent ODE and SDE forms and can be sampled via SDE-so
 
 By fixing the conditioning $c$ and varying the initial noise, you can sample multiple realisations rather than the average realisation that an MLP or Autoregressive transformer learn.
 
-:::{.callout-tip}
-The mathematical details of these models and the derivation of their training objectives are out of scope but if you're interested you may find these resources helpful:
+For more background, see the [introduction to normalising flows and flow matching](https://mlg.eng.cam.ac.uk/blog/2024/01/20/flow-matching.html).
 
-* [Accessible introduction to Diffusion (YouTube)](https://www.youtube.com/watch?v=iv-5mZ_9CPY)
-* [Introduction to Normalising Flows and Flow Matching (Blog)](https://mlg.eng.cam.ac.uk/blog/2024/01/20/flow-matching.html)
-* [Explanation of score-based diffusion by its inventor (Blog)](https://yang-song.net/blog/2021/score/#connection-to-diffusion-models-and-others)
-* [Unifying flow matching and diffusion (Monograph)](https://arxiv.org/pdf/2510.21890)
+## Training and sampling settings
 
-:::
-
-
-## Configuring a Flow Matching model
-
-The installed preset is `model=flow_matching`: `n_blocks=2`, `n_head=4`,
-`n_kv_head=4`, `embd_dim=64`, `cond_dropout_prob=0`, `interpolant=linear`.
-Architecture options are flat under `model.model_options`; there is no nested
-`sit` configuration. Blocks control depth, embedding width controls capacity,
-and head counts control the attention decomposition.
+`n_blocks` controls depth and `embd_dim` controls width. The default has two
+blocks, width 64 and four query/key-value heads.
 
 ```bash
 uv run metis train model=flow_matching model.model_options.embd_dim=128 evaluation.num_steps=100
 ```
 
-`interpolant=linear` uses linear noise-to-data paths; `trig` selects the
-trigonometric interpolant. Both change the training objective/path and should be
-recorded with results. `num_steps` and `solver` are sampling options, separate
-from training: `model.sample(inputs, n_samples=100, num_steps=50, solver="heun")`.
-Euler and Heun are supported. More integration steps cost time and do not by
-themselves establish predictive calibration.
-
-Dimensions come from the dataset. `qkv_bias` and `in_and_out_biases` are optional
-architecture fields. For observed channels use
-`model.observed_outputs=[intervention]`; the full supplied path is available to
-the network. This is conditional generation, not a causal forecast. See
-[conditioning](../package/conditioning.qmd). Classifier-free guidance is not a
-public sampling feature; do not interpret conditioning dropout as such a guarantee.
+`interpolant` chooses a linear (`linear`, default) or trigonometric (`trig`)
+noise-to-data training path. Sampling has separate settings: `num_steps` controls
+integration effort, and `solver` chooses Euler or Heun. More solver steps cost
+more time; compare predictions to determine whether they help.

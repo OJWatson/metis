@@ -1,3 +1,6 @@
 /.quarto/
 /_site/
 **/*.quarto_ipynb
+/_freeze/
+**/*-output/
+/basics/sirds_data.parquet

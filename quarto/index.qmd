@@ -2,71 +2,34 @@
 title: "METIS"
 ---
 
-METIS turns a bank of simulator runs into a neural surrogate you can train,
-evaluate, save and use in notebooks, fitting scripts or dashboards.
+METIS learns a fast surrogate from a bank of simulator runs. Use it to make
+predictions, generate new trajectories, or supply a learned density to a fitting
+routine.
 
-[Start with a complete example](package/quickstart.qmd){.btn .btn-primary}
-[Configure runs with Hydra](package/hydra.qmd){.btn .btn-secondary}
+[Train your first surrogate](package/quickstart.qmd){.btn .btn-primary}
+[Install locally](basics/installing_metis.qmd){.btn .btn-secondary}
 
-## One library and two useful entry points
+The tutorials show executed code, plots and results. Download a **Jupyter**
+notebook or choose **Open in Colab** under **Other Formats** to run one yourself.
+In Colab, choose **Runtime → Run all**; the first cell prepares the environment.
 
-Use Python objects when working interactively or embedding a model in an
-application. Use Hydra to compose experiment configurations, override settings
-and run sweeps. Both call the same training and evaluation functions and save
-the same model artifacts.
+## Start with your simulations
 
-## From simulations to trustworthy predictions
+1. [Work through a CSV example](package/own-bank.qmd) to load, train and save a model.
+2. [Compare model families](package/model-choice.qmd) on held-out simulations.
+3. [Check predictions and variability](package/evaluation.qmd) before using the surrogate.
+4. [Reload it in your own application](package/deployment.qmd).
 
-1. [Read and validate your simulation bank](package/data.qmd).
-2. Train an MLP baseline, then compare model families relevant to your goal.
-3. [Evaluate withheld trajectories in original units](package/evaluation.qmd).
-4. [Save and reload the model in another process](package/deployment.qmd).
-5. Inspect errors and coverage before choosing where to simulate next.
+Use the Python API in notebooks and applications, or [Hydra](package/hydra.qmd)
+for configuration files, experiment overrides and sweeps. Both use the same
+training and evaluation code.
 
-The library supports deterministic prediction (MLP and autoregressive
-transformer) and stochastic trajectories (flow matching and normalising flow).
-An evaluable flow density can support approximate-likelihood fitting.
-Generated variability is not uncertainty about surrogate accuracy.
+## Understand the models
 
-CPU training works by default. The shared engine also provides optional CUDA,
-multiple devices, precision settings and strict checkpoint resume. Transformer
-and flow matching support [observed sequence conditioning](package/conditioning.qmd).
-All public models use the fitted fixed time grid. See [training](basics/training.qmd)
-for settings and hardware validation limits.
+METIS includes [MLPs](models/mlp.qmd) and [transformers](models/transformer.qmd)
+for deterministic predictions, plus [flow matching](models/flow-matching.qmd)
+and [normalising flows](models/normalising-flow.qmd) for stochastic trajectories.
+Each model tutorial explains the idea and runs a small example.
 
-## Installation
-
-Start a project with [uv](https://docs.astral.sh/uv/) and install CPU PyTorch.
-On Linux or Windows:
-
-~~~bash
-uv init my-surrogate --python 3.13
-cd my-surrogate
-uv add "torch>=2.10,<3" --index pytorch-cpu=https://download.pytorch.org/whl/cpu
-~~~
-
-On Apple Silicon macOS, use `uv add "torch>=2.10,<3"` for the last command.
-Intel Macs are unsupported by the current PyTorch dependency range. Set
-`explicit = true` on a named PyTorch index in `pyproject.toml` so unrelated
-dependencies use PyPI, then add METIS:
-
-~~~bash
-uv add "metis-surrogate @ git+https://github.com/OJWatson/metis.git"
-uv run metis demo --steps 100 --output metis-demo
-~~~
-
-uv maintains your dependency file, lockfile and `.venv`; run project commands
-with `uv run`, without manually activating an environment. The
-[quickstart](package/quickstart.qmd) shows the complete index configuration,
-optional extras, notebook setup and CUDA setup.
-
-Python 3.11+ is supported. The import is `metis`; the distribution is
-`metis-surrogate`. This project is not yet published on PyPI, and the existing
-PyPI `metis` package is unrelated.
-
-## Development and provenance
-
-The original model implementations, diagrams and scientific explanations remain
-in the background sections, with current installed-package recipes. The package workflow is the recommended starting
-point for a new researcher. The repository is MIT licensed, with attribution
-and third-party notices preserved.
+For reference, see the [data format](package/data.qmd),
+[API](package/api.qmd) and [troubleshooting](package/troubleshooting.qmd).

@@ -23,6 +23,7 @@ website:
         text: Home
       - section: "Use the package"
         contents:
+          - basics/installing_metis.qmd
           - package/quickstart.qmd
           - package/own-bank.qmd
           - package/data.qmd
@@ -39,7 +40,6 @@ website:
           - basics/motivation.qmd
           - basics/sirds-example.qmd
           - basics/preparing-data.qmd
-          - basics/installing_metis.qmd
           - basics/hydra.qmd
           - basics/training.qmd
           - basics/saving-and-loading.qmd
@@ -73,10 +73,12 @@ format:
     theme: cosmo
     css: styles.css
     toc: true
-  ipynb: default
 
-# Cache executed cells so a full render doesn't re-run the training/data code
-# every time. Delete a page's _freeze entry (or run `quarto render --no-cache`)
-# to force re-execution.
+# Each notebook tutorial opts into ipynb; reference pages remain HTML only.
+# build_docs.py stages a clean copy and exports these executed notebooks.
 execute:
-  freeze: auto
+  eval: true
+  error: false
+  freeze: false
+  cache: false
+keep-ipynb: true

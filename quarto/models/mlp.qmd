@@ -1,70 +1,106 @@
 ---
 title: "MLP"
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
+execute:
+  eval: true
 ---
 
-The MLP (MultiLayer Perceptron) or *feedforward neural network* is Metis's most basic architecture.
+The multilayer perceptron (MLP) is the simplest METIS surrogate. It maps static
+inputs directly to a complete output trajectory. It is a useful first model:
+fast to train, fast to predict, and easy to compare with more complex choices.
 
-## When this might be a good fit
+Its predictions are deterministic. It learns a mean-like response under squared
+error, rather than generating the simulator's stochastic variation.
 
-The MLP is a good starting point for datasets with only static inputs. It is very fast to train and generate predictions from. Its relative accuracy depends on the bank and tuning. Unlike normalising flow or flow matching, it produces a deterministic trajectory.
+## Try it
 
+This small continuous-valued example uses 40 parameter settings, four
+realisations per setting and eight time points. The response is
+$y(t)=\theta(1+\sin t)+0.3\cos t+\epsilon$, with independent
+$\epsilon\sim N(0,0.08^2)$. The known mean lets us see what the surrogate learns.
+This is a short teaching fit, not a benchmark of the model families.
 
-<!-- TODO: the kinds of problems an MLP surrogate suits. -->
+```{python}
+#| code-fold: true
+#| code-summary: "Create the example bank"
+import numpy as np
+import matplotlib.pyplot as plt
+from metis import SimulationDataset, Surrogate, TrainingConfig
 
-## How does an MLP work?
-
-### Architectural walkthrough
-An MLP's computation is a series of matrix multiplications composed with non-linear activations. Metis's implementation also includes *residual* connections which stabilise the training of deeper networks.
-
-In order to get a better sense of how these components work lets trace through the network's forward computation:
-
-
-```python
-x = self.input_layer(inputs)
-for block in self.blocks:
-    x = block(x)
-x = self.output_layer(x)
+rng = np.random.default_rng(7)
+times = np.linspace(0, 2, 8)
+inputs = np.repeat(np.linspace(0.2, 1.2, 40)[:, None], 4, axis=0)
+mean = inputs[:, None, :] * (1 + np.sin(times)[None, :, None])
+mean = mean + 0.3 * np.cos(times)[None, :, None]
+outputs = mean + rng.normal(0, 0.08, mean.shape)
+bank = SimulationDataset.from_arrays(
+    inputs, outputs, input_names=["theta"], output_names=["response"], times=times,
+)
+split = bank.split(seed=42)
 ```
 
-The input_layer linearly projects (i.e. a matrix multiplication) the static input vector to vectors the size of the model's hidden dimension. Next, we iteratively pass our transformed inputs through a series of residual blocks.
-
-Each residual block applies several layers to the input and adds the result back to the original input:
-
-```{mermaid}
-%%| fig-cap: "Residual block structure."
-flowchart LR
-    x[x] --> layer1[Linear]
-    layer1 --> activation1[ReLU]
-    activation1 --> dots[...]
-    dots --> layerN[Linear]
-    x --> add["\+"]
-    layerN --> add
-    add --> out[output]
+```{python}
+model = Surrogate(
+    "mlp",
+    model_options={"hidden_dim": 32, "num_blocks": 1, "num_layers_per_block": 2},
+).fit(
+    split.train, split.validation,
+    config=TrainingConfig(steps=300, batch_size=32, eval_every=50, seed=42),
+)
 ```
 
-Finally, the output layer linearly projects `x` to the output dimensionality.
+Compare the prediction with the known mean and one held-out realisation.
 
-### Training
-The MLP is trained to minimise the Mean-Squared Error:
+```{python}
+theta = split.test.inputs[:1]
+prediction = model.predict(theta)[0, :, 0]
+expected = theta[0, 0] * (1 + np.sin(times)) + 0.3 * np.cos(times)
+print(f"RMSE against the known mean at theta={theta[0, 0]:.3f}: "
+      f"{np.sqrt(np.mean((prediction - expected) ** 2)):.3f}")
+```
+
+```{python}
+#| code-fold: true
+#| code-summary: "Plot the held-out prediction"
+#| fig-cap: "MLP: short CPU fit on the synthetic continuous bank. This parameter setting was withheld from training."
+fig, ax = plt.subplots(figsize=(6, 3.5))
+ax.plot(times, split.test.outputs[0, :, 0], "o", label="Held-out realisation")
+ax.plot(times, expected, "--", color="black", label="Known mean")
+ax.plot(times, prediction, label="MLP prediction")
+ax.set(xlabel="Time", ylabel="Response")
+ax.legend()
+fig.tight_layout()
+plt.show()
+```
+
+## How it works
+
+A linear layer maps the inputs to a hidden vector. Residual blocks transform
+that vector, then a final linear layer produces all time points and channels.
+Each residual block adds its input back to the transformed vector:
+
+![An MLP residual block adds its input to the output of its linear layers.](images/residual-block.png)
+
+Training minimizes mean squared error between standardized predictions and
+simulations:
 
 $$
-\mathrm{Loss} = \frac{1}{M}\sum_{m=1}^{M}(\mathrm{MLP}^{\theta}(\mathrm{static\_input}_m)-\mathrm{output}_m)^2
+\mathcal L(\theta)=\frac{1}{M}\sum_{m=1}^{M}
+\left(\mathrm{MLP}_{\theta}(x_m)-y_m\right)^2.
 $$
 
-<!-- TODO: brief, accessible primer on feed-forward neural networks. -->
+## Change its size
 
-## Configuring an MLP
-
-The installed preset is `model=mlp`: width `hidden_dim=64`, `num_blocks=2`
-residual blocks and `num_layers_per_block=2`. Larger widths increase capacity
-and memory; more blocks/layers deepen the mapping. The input size and flattened
-`T × C` output size come from the dataset.
+`hidden_dim` controls width, `num_blocks` the number of residual blocks, and
+`num_layers_per_block` their depth. Input and output sizes come from the bank.
+The default width is 64 with two blocks of two layers.
 
 ```bash
-uv run metis train model=mlp model.model_options.hidden_dim=128 model.model_options.num_blocks=4
+uv run metis train model=mlp model.model_options.hidden_dim=128
 ```
 
-The Python equivalent is `Surrogate("mlp", model_options={"hidden_dim": 128,
-"num_blocks": 4})`. Start with the small preset and compare validation error
-before increasing capacity. The historical small/default/large names are mapped
-in [migration](../package/migration.qmd).
+Increase capacity only if it improves validation predictions.

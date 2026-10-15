@@ -35,8 +35,9 @@ uv run metis demo --steps 100 --output metis-demo
 uv maintains `pyproject.toml` (your dependencies), `uv.lock` (resolved versions)
 and `.venv` (the project environment). Use `uv run` for commands and scripts;
 manual environment activation is unnecessary. See the
-[quickstart](https://ojwatson.github.io/metis/package/quickstart.html) for the
-complete index configuration, notebook setup and optional CUDA setup.
+[installation guide](https://ojwatson.github.io/metis/basics/installing_metis.html)
+for notebook and CUDA setup. The [tutorials](https://ojwatson.github.io/metis/package/quickstart.html)
+show executed plots and can be downloaded or opened in Colab.
 
 The distribution is named **metis-surrogate** and the Python import is **metis**.
 It is not yet on PyPI; the existing PyPI project named `metis` is an unrelated

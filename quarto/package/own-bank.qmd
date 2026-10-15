@@ -1,73 +1,112 @@
 ---
-title: "A beginner handoff with a different simulation bank"
+title: "Bring your own simulations"
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
+execute:
+  eval: true
 ---
 
-First run the [quickstart](quickstart.qmd). Then practice the full handoff on a
-small synthetic stock/flux bank, independent of the bundled SIRDS example.
-This checks data handling and software use; its short training run makes no
-scientific accuracy claim and is not an agent-based simulation benchmark.
+Start with a table containing one row per **simulation run and timepoint**.
+This example creates a small CSV so you can run every cell before substituting
+your own file. For local setup, see [installation](../basics/installing_metis.qmd).
 
-## Practice with a CSV
+## A small example bank
 
-Save [own_bank.py](https://github.com/OJWatson/metis/blob/main/examples/own_bank.py)
-as `own_bank.py` in your uv project. It generates 30 parameter settings, three
-replicates and 12 timepoints, with static inputs `decay` and `forcing` and
-outputs `stock` and `flux`. The toy recurrence and its noise are explicit in
-the script. No SIRDS or malaria bank is trained by this exercise.
+The toy simulator tracks a stock with decay and external forcing. Every time
+step it applies $s_{t+1}=(1-d)s_t+f+\epsilon_t$, starting at $s_0=10$.
+Noise is independently drawn from $N(0,0.1^2)$. Its flux is
+$d s_t+\eta_t$, with independent $N(0,0.05^2)$ noise. This gives 30 parameter
+settings, three replicates each and 12 timepoints; it is a data-handling exercise.
 
-```bash
-uv run python own_bank.py --make-bank-only
-uv run metis inspect-data own-bank/bank.parquet --inputs decay forcing --outputs stock flux
-uv run python own_bank.py --csv own-bank/bank.csv --steps 100
-```
-
-The first command writes CSV and Parquet. The second validates the bank without
-training. The final command loads the CSV with Polars, validates it through
-`SimulationDataset.from_frame`, splits by input group, fits an MLP, evaluates
-held-out groups, and saves `model.pt`, `evaluation.json` and `prediction.npy`
-inside `own-bank/`. Inspect the per-output errors; successful execution alone
-does not establish that the fit is useful.
-
-Run this in a fresh Python process to check deployment:
-
-```python
-from metis import Surrogate
-model = Surrogate.load("own-bank/model.pt")
-print(model.predict({"decay": 0.2, "forcing": 0.6}).shape)  # (1, 12, 2)
-```
-
-Save it as `predict.py` and use `uv run python predict.py`. This process does
-not read the original bank.
-
-## Substitute your real bank
-
-Aggregate your agent records into trajectories first. Replace the script's
-explicit `INPUTS`/`OUTPUTS` lists with your column names; do not merely rename
-unrelated quantities. Choose consistent time and replicate identifiers, units,
-parameter groups and scientific outputs. The exercise's later standalone
-prediction snippet also needs your own parameter names and values. For an existing CSV the central step is:
-
-```python
+```{python}
+from pathlib import Path
+import matplotlib.pyplot as plt
+import numpy as np
 import polars as pl
-from metis import SimulationDataset
-frame = pl.read_csv("my_bank.csv")
-bank = SimulationDataset.from_frame(
-    frame, inputs=["contact_rate", "recovery_rate"],
-    outputs=["incidence", "prevalence"],
-)
+import torch
+
+from metis import SimulationDataset, Surrogate, TrainingConfig
+
+torch.set_num_threads(2)
+output = Path("own-bank-output")
+output.mkdir(exist_ok=True)
+rng = np.random.default_rng(42)
+rows = []
+for decay in np.linspace(0.05, 0.5, 6):
+    for forcing in np.linspace(0.2, 1.0, 5):
+        for rep in range(3):
+            stock = 10.0
+            for t in range(12):
+                flux = decay * stock + rng.normal(0, 0.05)
+                rows.append(dict(decay=decay, forcing=forcing, rep=rep,
+                                 t=t, stock=stock, flux=flux))
+                stock = (1 - decay) * stock + forcing + rng.normal(0, 0.1)
+pl.DataFrame(rows).write_csv(output / "bank.csv")
 ```
 
-Use the [data contract](data.qmd) to resolve errors. Preserve test groups while
-you tune on validation. Decide your acceptable error in original units and any
-scientific constraints before interpreting a fit. A new grid, partially observed
-records or categorical inputs requires an explicit preparation decision.
+## Tell METIS which columns mean what
 
-## What is checked automatically
+`inputs` are constant within a run; `outputs` vary with time. Here `rep` identifies
+a replicate and `t` identifies a timepoint. Replicates with the same inputs are
+kept together when splitting the bank.
 
-The repository's `scripts/check_beginner_handoff.py` creates a new uv project,
-installs a built wheel, runs this CSV exercise and validates a fresh-process
-reload. It also runs the installed Hydra transformer with an observed channel,
-saves a training checkpoint and checks compatible resume and artifact parity. It is an automated acceptance check, **not an observed human usability
-trial**. A real new starter should also be asked to explain the input schema,
-held-out result and limits of their predictions; those scientific explanations
-cannot be inferred from a passing script.
+```{python}
+frame = pl.read_csv(output / "bank.csv")
+frame.head().to_pandas()
+```
+
+```{python}
+bank = SimulationDataset.from_frame(
+    frame,
+    inputs=["decay", "forcing"],
+    outputs=["stock", "flux"],
+)
+print(f"Validated {len(bank)} runs, {len(bank.times)} timepoints and {len(bank.output_names)} outputs")
+```
+
+For your own data, change the CSV path and these two column lists. METIS checks
+for missing values, duplicate run/time rows and inconsistent time grids.
+See the [data contract](data.qmd) if your identifiers or layout differ.
+
+## Train and inspect the result
+
+```{python}
+split = bank.split(validation_fraction=0.2, test_fraction=0.2, seed=42)
+model = Surrogate("mlp").fit(
+    split.train, split.validation,
+    config=TrainingConfig(steps=500, eval_every=50, seed=42),
+)
+report = model.evaluate(split.test)
+report.by_output.to_pandas().round(3)
+```
+
+```{python}
+#| label: fig-own-bank-test
+#| fig-cap: "MLP fitted to the synthetic stock/flux training partition: predictions for two held-out test realizations."
+fig = report.plot(max_runs=2)
+plt.show()
+```
+
+The model predicts a typical trajectory rather than individual noise draws.
+Use the errors in stock and flux units to decide whether it suits your task.
+[Stochastic surrogates](model-choice.qmd) can generate multiple realizations.
+
+## Reuse it elsewhere
+
+```{python}
+model.save(output / "model.pt")
+report.save(output / "evaluation.json")
+restored = Surrogate.load(output / "model.pt")
+query = dict(zip(bank.input_names, split.test.inputs[0].tolist()))
+prediction = restored.predict(query)
+print("Query:", query)
+print("Prediction shape:", prediction.shape)
+np.testing.assert_allclose(prediction, model.predict(query))
+```
+
+Copy `model.pt` to your dashboard or analysis project. With METIS installed, the
+last four lines work without the training CSV. Replace `query` with values for
+your model's inputs; preserve their meaning and units.

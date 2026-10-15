@@ -1,74 +1,113 @@
 ---
-title: "Choose a model and diagnose training"
+title: "Choose and compare models"
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
+execute:
+  eval: true
 ---
 
-Choose the quantity you need to predict before choosing the architecture. METIS
-does not automatically decide which scientific errors are acceptable.
+Start with what you need the surrogate to return, then compare candidates on the
+same validation simulations. For local setup, see
+[installation](../basics/installing_metis.qmd).
 
-## Start with the intended use
-
-| Intended use | First comparison | What to check |
+| You need… | Start with… | Check… |
 |---|---|---|
-| A dashboard showing the expected trajectory | Training-bank mean versus `mlp` | Original-unit error on new parameter settings and the outcomes users will inspect |
-| A deterministic trajectory with sequential structure | `mlp` versus `transformer` | Fully generated trajectories; teacher-forced loss can hide accumulated rollout errors |
-| A dashboard or decision calculation requiring random realizations | `flow_matching` or `itarflow` | CRPS, predictive coverage and width, temporal dependence, rare outcomes and physical constraints |
-| Fitting parameters using a learned continuous likelihood | `itarflow` | Held-out density, generative checks and the explicit observation/discrepancy model needed by the fitting problem |
+| A typical trajectory for a dashboard | `mlp` | Errors in the outputs users inspect |
+| A trajectory generated one timepoint at a time | `transformer` | Full generated paths, not only training loss |
+| Random simulator-like realizations | `flow_matching` or `itarflow` | Mean error, CRPS, predictive intervals and realistic paths |
+| A learned continuous density for parameter fitting | `itarflow` | Density and generative checks; see [likelihood inference](../sbi/vi-mcmc.qmd) |
 
-A deterministic model cannot reproduce variation between repeated simulator
-runs at the same inputs. A stochastic model can generate variation but does not
-thereby quantify uncertainty about its own accuracy. A short neural training run
-can also perform worse than the simple training-bank mean.
+## Compare two models with a simple baseline
 
-## Compare using validation, then test once
+Here an MLP and transformer each receive 500 training steps on the bundled SIRDS
+bank. A baseline predicts the training bank's average trajectory for every input.
+This is a small worked comparison, not a general ranking of the architectures.
 
-Create the grouped split once and reuse it. Keep the test partition aside while
-choosing architecture, training duration and learning rate. For example:
+```{python}
+import warnings
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import torch
 
-```python
-from metis import Surrogate, TrainingConfig
+from metis import load_example, Surrogate, TrainingConfig
 
-comparisons = []
+torch.set_num_threads(2)
+split = load_example().split(seed=42)
+models = {}
+rows = []
 for family in ("mlp", "transformer"):
-    candidate = Surrogate(family).fit(
+    model = Surrogate(family).fit(
         split.train, split.validation,
-        config=TrainingConfig(steps=1000, seed=42),
+        config=TrainingConfig(steps=500, eval_every=50, seed=42),
     )
-    validation = candidate.evaluate(split.validation)
-    comparisons.append((family, validation.metrics, validation.by_output))
+    # Validation already chose checkpoint weights; use it for model selection too.
+    # The warning is expected here. It would matter if this were called a test.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="This bank overlaps training or tuning groups;.*", category=UserWarning)
+        report = model.evaluate(split.validation)
+    models[family] = model
+    rows.append({"model": family, **report.metrics})
+
+baseline = split.train.outputs.mean(axis=0)
+error = baseline[None] - split.validation.outputs
+rows.append({"model": "training mean", "rmse": np.sqrt(np.mean(error**2)),
+             "mae": np.mean(np.abs(error))})
+comparison = pd.DataFrame(rows).set_index("model")
+comparison.round(2)
 ```
 
-Evaluating validation emits a provenance warning because these groups helped
-choose weights. This is appropriate for tuning; it is not an independent test.
-Inspect per-output results, since a large numerical scale can dominate an
-aggregate RMSE. Define your decision rule and acceptable error in advance where
-possible, then evaluate the selected model on `split.test`. If the test results
-drive further tuning, obtain a fresh independent test bank.
+All four SIRDS outputs are counts. Here the decision rule is the lowest
+validation RMSE averaged over those outputs. Use a different, explicit rule
+when some outputs matter more or their units differ.
 
-The reproducible `benchmarks/compare_models.py` script compares all four families
-against a training-mean baseline on frozen groups. Its default short SIRDS run is
-an engineering pilot, not a recommended training budget or an architecture ranking
-for a different simulator.
+```{python}
+#| label: fig-model-comparison
+#| fig-cap: "MLP and transformer fitted to the same SIRDS training partition for 500 steps: autonomous prediction RMSE on the validation partition, compared with the training-mean baseline."
+fig, ax = plt.subplots(figsize=(7, 3))
+comparison["rmse"].plot.barh(ax=ax, color=["C0", "C1", "0.65"])
+ax.set(xlabel="Validation RMSE (people)", ylabel="")
+fig.tight_layout()
+plt.show()
+```
 
-## Read the training history
+## Test the selected model
 
-`model.history` records training loss at each optimizer step and validation loss
-at each evaluation step.
-W&B can plot these records live; see [tracking with Hydra or Python](hydra.qmd).
-The restored model uses the best evaluated validation checkpoint, which may be
-earlier than the final training step. Inspect `model.training_metadata`.
+Select using validation, then evaluate that choice on test settings held aside
+until now. If a baseline wins, it is a reason to improve the candidate models
+before deploying them.
 
-| Observation | Interpretation to investigate | Next action |
-|---|---|---|
-| Both losses remain high or flat | Optimization, model capacity or data representation may be inadequate | Verify input/output pairing and units; check a tiny subset can be fitted; compare longer training and learning rates using validation |
-| Training improves while validation gets worse | Overfitting or a different validation regime | Inspect scenario ranges; use `TrainingConfig(patience=...)`, more independent scenarios or a smaller model |
-| Loss becomes nonfinite | Numeric instability or invalid model settings | Follow the exception, verify finite inputs, lower the learning rate and inspect architecture settings |
-| Transformer validation loss is low but generated trajectories drift | Teacher forcing and autonomous rollout solve different prediction problems | Inspect `evaluate()` results and compare an MLP; changing only the plotted training loss cannot resolve this |
-| Predictive coverage is low | A fitted generator misses observed variability, or Monte Carlo estimation is noisy | Inspect interval width and CRPS together, increase evaluation samples and inspect conditioning regimes |
-| Good mean accuracy but implausible trajectories | Output support or temporal/cross-output dependence is wrong | Apply explicit diagnostic constraints and inspect full realizations; clipping is not validation |
-| Errors concentrate in poorly covered input regions | The training bank may lack relevant scenarios | Use `assess_coverage`, measured group errors and scientifically valid candidate settings to plan more simulations |
+```{python}
+selected = comparison.loc[list(models), "rmse"].idxmin()
+print("Selected neural model:", selected)
+print("Best model including baseline:", comparison["rmse"].idxmin())
+final_report = models[selected].evaluate(split.test)
+final_report.by_output.to_pandas().round(2)
+```
 
-Loss values from MLP/Transformer MSE, flow velocity fitting and iTARFlow density
-training have different meanings. Compare families using common held-out
-prediction/distribution metrics, not their raw optimization loss. Repeated seeds
-and new scenario splits are needed to measure training and sampling variability;
-the package does not manufacture confidence intervals from one fit.
+```{python}
+#| label: fig-selected-test
+#| fig-cap: "Validation-selected neural model fitted to the SIRDS training partition: infected-count prediction against a held-out test realization."
+fig = final_report.plot(output="I_t", max_runs=1)
+plt.show()
+```
+
+Once test results influence your tuning, they no longer provide an independent
+final assessment. Use a fresh test bank for the next claim.
+
+## Diagnose a disappointing fit
+
+| What you see | What to try |
+|---|---|
+| Training and validation losses both stay high | Check input/output pairing; fit a tiny subset; compare learning rates and longer training |
+| Training improves but validation worsens | Try fewer parameters, early stopping with `TrainingConfig(patience=...)`, or more independent scenarios |
+| Transformer loss is low but generated paths drift | Compare full predictions with an MLP; training uses observed history, deployment generates its own |
+| Mean predictions look good but variability is wrong | Inspect [predictive intervals and CRPS](evaluation.qmd), plus temporal and cross-output dependence |
+| Errors cluster in particular parameter regions | Inspect those simulations and [coverage gaps](evaluation.qmd#suggest-new-parameter-settings) |
+
+Model families optimize different losses, so compare them using common
+prediction metrics rather than raw training loss. Repeat seeds and splits when
+you need to establish how stable a model choice is.

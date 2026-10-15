@@ -25,7 +25,7 @@ platform build from PyPI on Apple Silicon macOS. Intel Macs are unsupported by
 the current PyTorch dependency range. CPU CI also tests a built wheel outside the
 checkout. The committed lockfile records a development resolution, not a promise
 that every GPU/driver combination has been tested. For CUDA, follow the
-[named-index setup](https://ojwatson.github.io/metis/package/quickstart.html#optional-cuda-setup)
+[named-index setup](https://ojwatson.github.io/metis/basics/installing_metis.html#optional-cuda-setup)
 to change your local torch source and lockfile, then run
 `uv sync --locked --all-extras` again. The shared training engine supports CPU or CUDA.
 
@@ -39,20 +39,30 @@ predictions and active (nonzero) attention. Do not present a passing unit
 test as evidence of scientific accuracy.
 
 Documentation is a Quarto website. Install the Quarto CLI separately; the
-`--all-extras` setup above supplies its Python dependencies. Run the CLI through
-the project environment and then check links and execute the beginner notebook:
+`--all-extras` environment supplies its Python dependencies. Build the site with:
 
 ~~~bash
-uv run --locked --all-extras quarto render quarto --to all --no-execute
+uv run --locked --all-extras python scripts/build_docs.py
 uv run --locked --all-extras python scripts/check_site_links.py quarto/_site
-uv run --locked --all-extras python scripts/check_tutorial_notebook.py quarto/_site/package/quickstart.ipynb
-uv run --locked --all-extras python examples/package_quickstart.py --steps 20 --output /tmp/metis-example
+uv run --locked --all-extras python scripts/check_tutorial_notebook.py quarto/_site --outputs-only
 ~~~
 
-The beginner example and generated notebook are executed in CI separately from site rendering.
-Scientific background pages use illustrative snippets; their mathematical exposition
-does not imply that posterior inference or large training jobs were executed.
-The website is deployed by the documentation workflow after a push to main.
+The build executes every tutorial in a temporary copy of the documentation,
+then exports notebooks with their plots and results. It fails on execution
+errors, unexecuted cells or missing figures. Notebook tutorials declare
+`metis-notebook: true` and both `html` and `ipynb` formats; reference pages
+remain HTML only. Keep examples self-contained, CPU-friendly and free of
+external accounts or private data. Use `{python}` cells for runnable code.
+
+A shared setup cell is added to downloads for Colab; do not repeat installation
+commands in tutorial sources. Every notebook records the source commit and
+installs that revision. CI publishes executed notebooks to the `notebooks`
+branch and deploys the website only after a successful main-branch build.
+To rerun one exported notebook from a fresh directory:
+
+~~~bash
+uv run --locked --all-extras python scripts/check_tutorial_notebook.py quarto/_site/package/quickstart.ipynb
+~~~
 
 Before a public package-index release, review the notices in
 ATTRIBUTION.md, review the dependency range and run GPU smoke tests on the
