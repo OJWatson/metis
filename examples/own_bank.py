@@ -5,6 +5,7 @@ its CSV with your own bank only after adapting the explicit column lists.
 """
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -66,7 +67,7 @@ def main(argv=None):
     assert prediction.shape == (1, len(bank.times), len(bank.output_names))
     assert np.isfinite(prediction).all()
     np.save(args.output / "prediction.npy", prediction)
-    print(report.by_output)
+    print(json.dumps(report.by_output.to_dicts(), indent=2))
     print("Synthetic installation exercise; no scientific accuracy claim.")
 
 
