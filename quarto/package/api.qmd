@@ -14,12 +14,14 @@ conditioning channels, `B` requested parameter settings and `S` generated sample
 from metis import SimulationDataset, DatasetSplit
 
 bank = SimulationDataset.from_parquet(
-    "bank.parquet", inputs=["rate"], outputs=["response"],
+    "sirds_data.parquet",
+    inputs=["I_0", "beta", "gamma", "omega", "mu"],
+    outputs=["S_t", "I_t", "R_t", "D_t"],
     groups=None, time="t", replicate="rep",
 )
 # Or: SimulationDataset.from_frame(polars_or_pandas_frame, same_keyword_arguments)
 # Or: SimulationDataset.from_arrays(
-#     x, y, input_names=["rate"], output_names=["response"],
+#     x, y, input_names=bank.input_names, output_names=bank.output_names,
 #     times=None, group_keys=None, replicate_ids=None,
 # )
 ```
@@ -36,7 +38,7 @@ indices. Data are immutable snapshots. Access `inputs`, `outputs`, `input_names`
 `DatasetSplit.from_datasets(train, validation=None, test=None)` validates already
 split banks. Schemas and grids must agree; group identities must not overlap.
 Errors report nonfinite values, duplicates, incomplete grids, changing static
-inputs, invalid identities or too few groups. See [data contracts](data.qmd).
+inputs, invalid identities or too few groups. See [data preparation](../basics/preparing-data.qmd).
 
 ## Surrogate and fitting
 
@@ -104,9 +106,10 @@ schemas reject missing/extra columns. Input range warnings flag extrapolation,
 not all poorly covered joint combinations. Predictions are not clipped.
 
 For conditioned models, supply a finite original-unit array `(B,T,K)` in
-`observed_outputs` order. It is required for every call; unconditioned models
+`observed_outputs` order, or a mapping from each observed channel name to its
+`(B,T)` array. It is required for every call; unconditioned models
 reject it. Transformer conditions on prior observed history, while flow matching
-uses the whole supplied path. See [conditioning](conditioning.qmd).
+uses the whole supplied path. See [conditioning](../models/transformer.qmd).
 
 Generated variability represents the learned simulator distribution, not
 uncertainty in neural weights. Density evaluation is not an observation model,
@@ -126,7 +129,7 @@ The report exposes `metrics` (aggregate dictionary), `by_output` and `by_group`
 `save(path)` writes JSON; `worst_groups(n=10)` ranks group RMSE;
 `plot(output=None, max_runs=4)` requires the `[plots]` extra. Metrics include
 MAE/RMSE, replicate-mean error when supported, and stochastic empirical CRPS,
-pointwise 90% coverage and interval width. See [evaluation](evaluation.qmd)
+pointwise 90% coverage and interval width. See [the training walkthrough](../basics/training.qmd)
 for metric definitions and interpretation.
 
 Explicit checks report violations without modifying predictions. For a SIRDS
@@ -174,7 +177,7 @@ and optional `conditioning_scaler` contain the means, scales and constant masks.
   dimensions have scale one and a recorded mask. New fits use float64 scaling
   arithmetic before the float32 network.
 - `metis.preprocessing.truncate_simulations(bank, start_time=...)` and
-  `initialize_static_inputs(bank, mapping={"initial_stock": "stock"})` are
+  `initialize_static_inputs(bank, mapping={"initial_infected_count": "I_t"})` are
   explicit opt-in transformations, preserving scenario/replicate identities.
 - `metis.tracking.WandbTracker` is a context manager; pass
   `on_progress=tracker.log_training`, then `tracker.log_evaluation(report, prefix="test")`.

@@ -2,35 +2,48 @@
 title: "Weights & Biases"
 ---
 
-[Weights & Biases](https://wandb.ai) tracks experiments and organizes sweeps.
-METIS supports it through the same optional adapter in Python and Hydra.
+[Weights & Biases](https://wandb.ai) is a platform for managing sweeps and
+tracking experiments. It lets you follow training progress and keep a record
+of the settings and results from each run.
+
+Add METIS's optional W&B support to your uv project, then sign in:
 
 ```bash
-uv add "metis-surrogate[wandb] @ git+https://github.com/OJWatson/metis.git"
-uv run metis train wandb.enabled=true wandb.mode=offline
+uv add "metis-surrogate[plots,wandb] @ git+https://github.com/OJWatson/metis.git"
+uv run wandb login
 ```
 
-Include any other extras you use in the requirement. Offline mode needs no
-account. For an online run use `uv run wandb login`, then set
-`wandb.project=your-project` and, if needed, `wandb.entity=your-team`.
+Enable tracking for the SIRDS training workflow with:
 
-![Illustration of a training dashboard](images/example_wandb.png)
+```bash
+uv run metis train wandb.enabled=true wandb.project=sirds-surrogates
+```
 
-The dashboard image comes from the original research workflow; the current adapter logs training loss at each step, validation loss at evaluation
-steps and final evaluation metrics. Training and
-validation losses describe optimization. Use common evaluation scores when
-comparing model families.
+The same settings can go in your [Hydra configuration](../basics/hydra.qmd):
 
-![Illustration of parameter correlation within a sweep](images/parameter_correlation.png)
+```yaml
+wandb:
+  enabled: true
+  project: sirds-surrogates
+  tags: [mlp, sirds]
+```
 
-METIS sends configuration and scalar metrics, not simulation tables or model
-files automatically. The resolved configuration can include local paths and
-column names. Local inference artifacts and evaluation reports are saved
-independently. See [sweep configuration](sweep-config.qmd).
+For local tracking without an account, add `wandb.mode=offline` instead.
 
-## Track from Python
+![A W&B dashboard from the original METIS training workflow. The installed package logs training loss, validation loss and final evaluation metrics.](images/example_wandb.png)
 
-Pass the tracker to the same `Surrogate.fit` call used in the tutorials:
+W&B collects the runs in a sweep together, lets you sort them by a metric such
+as validation RMSE, and shows relationships between hyperparameters and model
+performance:
+
+![A W&B parameter-correlation view from the original METIS workflow.](images/parameter_correlation.png)
+
+METIS logs configuration and scalar metrics. Your simulation tables and saved
+model files stay local unless you upload them separately.
+
+## Tracking from Python
+
+The same tracker works with `Surrogate.fit`:
 
 ```python
 from dataclasses import asdict
@@ -38,22 +51,18 @@ from metis import load_example, Surrogate, TrainingConfig
 from metis.tracking import WandbTracker
 
 split = load_example().split(seed=42)
-config = TrainingConfig(steps=100, eval_every=20)
+config = TrainingConfig(steps=500, eval_every=50)
+
 with WandbTracker(
-    project="my-surrogate-study",
-    mode="offline",  # Change to online after configuring W&B authentication.
+    project="sirds-surrogates",
     config={"model": "mlp", "training": asdict(config)},
-    dir="tracking",
 ) as tracking:
     surrogate = Surrogate("mlp").fit(
         split.train, split.validation, config=config,
         on_progress=tracking.log_training,
     )
-    report = surrogate.evaluate(split.test)
-    tracking.log_evaluation(report, prefix="test")
-    surrogate.save("surrogate.pt")
-    report.save("evaluation.json")
+    report = surrogate.evaluate(split.validation)
+    tracking.log_evaluation(report, prefix="validation")
 ```
 
-The context manager closes the run when the block finishes. Change `mode` to
-`"online"` after authentication.
+Next, [set up a sweep](sweep-config.qmd) to compare several training runs.

@@ -1,5 +1,5 @@
 ---
-title: "A differentiable surrogate likelihood"
+title: "VI and MCMC with iTARFlow"
 jupyter: python3
 metis-notebook: true
 format:
@@ -9,120 +9,350 @@ execute:
   eval: true
 ---
 
-An iTARFlow model can evaluate $\log p(y\mid\theta)$ and differentiate it with
-respect to simulator inputs $\theta$. That is the link to parameter-fitting
-methods such as MCMC or variational inference.
+METIS's [normalising flow surrogate](../models/normalising-flow.qmd) has an
+exactly evaluable density. This lets us substitute the fitted surrogate into
+inference methods such as variational inference (VI) and Markov chain Monte
+Carlo (MCMC).
 
-This notebook fits a small synthetic example, plots its learned likelihood and
-calculates a gradient. It does not fit a posterior.
+Conceptually, the simulator has a likelihood $p^*(y\mid\theta)$ that we cannot
+easily evaluate. We fit a surrogate density $\hat p(y\mid\theta)$ and hope it
+approximates the features of that likelihood needed for inference. An exact
+calculation of $\hat p$ does not make it the exact simulator likelihood.
 
-## Train on simulated responses
+## Setup
 
-Our simulator has six time points: $y(t)=\theta(1+t)+\epsilon_t$, with independent
-$\epsilon_t\sim N(0,0.1^2)$. We simulate three replicates at each of 40 parameter
-settings, then hold out complete settings for validation and testing.
+We continue with the same [SIRDS model](../basics/sirds-example.qmd), its four
+count trajectories, and the bundled simulation bank. The following cells run
+when the documentation is built; the optional VI and MCMC recipes later on
+explain how a validated surrogate would enter an inference workflow.
 
 ```{python}
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-from metis import SimulationDataset, Surrogate, TrainingConfig
+from metis import load_example, Surrogate, TrainingConfig
 
-rng = np.random.default_rng(7)
-times = np.arange(6, dtype=float)
-inputs = np.repeat(np.linspace(0.1, 0.9, 40)[:, None], 3, axis=0)
-outputs = inputs[:, None, :] * (1 + times[None, :, None])
-outputs = outputs + rng.normal(0, 0.1, outputs.shape)
-bank = SimulationDataset.from_arrays(
-    inputs, outputs, input_names=["theta"], output_names=["response"], times=times,
-)
+bank = load_example()
 split = bank.split(seed=42)
-model = Surrogate("itarflow", model_options={
-    "channels": 32, "num_layers": 1, "num_blocks": 2, "num_heads": 2,
-}).fit(
-    split.train, split.validation,
-    config=TrainingConfig(steps=300, batch_size=32, eval_every=50, seed=42),
-)
+torch.manual_seed(42)
 ```
 
-## Inspect the likelihood
+## Train the surrogate
 
-Take one held-out trajectory and evaluate its density at a range of candidate
-inputs. In this synthetic example we also know the simulator's Gaussian density,
-so we can compare the two curves directly.
+As in the normalising-flow tutorial, we fit a small iTARFlow model on the SIRDS
+training groups and select its weights using the validation groups.
 
 ```{python}
-observation = split.test.outputs[:1]
-true_theta = float(split.test.inputs[0, 0])
-candidates = np.linspace(split.train.inputs.min(), split.train.inputs.max(), 200)
-repeated_observation = np.repeat(observation, len(candidates), axis=0)
-learned = model.log_prob(candidates[:, None], repeated_observation)
-residual = observation[0, :, 0] - candidates[:, None] * (1 + times)
-known = -0.5 * np.sum((residual / 0.1) ** 2 + np.log(2 * np.pi * 0.1**2), axis=1)
+nf = Surrogate(
+    "itarflow",
+    model_options={"channels": 32, "num_layers": 1, "num_blocks": 2, "num_heads": 2},
+).fit(
+    split.train, split.validation,
+    config=TrainingConfig(steps=1000, batch_size=64, eval_every=100, seed=42),
+)
+nf.save("sirds-likelihood.pt")
+```
+
+## Load the trained surrogate
+
+The saved model includes its input and output names, time grid and fitted
+scalers. Loading it does not require the training data or a reconstruction of
+its preprocessing:
+
+```{python}
+nf = Surrogate.load("sirds-likelihood.pt")
+print("Inputs:", nf.input_names)
+print("Outputs:", nf.output_names)
+```
+
+## Preparing an observation
+
+Use one trajectory from a held-out SIRDS parameter group as our observation.
+For this illustration, select a group inside each training-input range. Its
+generating parameters are known, so we can compare them with a likelihood
+slice later. For a scientific application this would instead be the observed
+data whose likelihood is being evaluated.
+
+```{python}
+in_range = np.all(
+    (split.test.inputs >= split.train.inputs.min(axis=0))
+    & (split.test.inputs <= split.train.inputs.max(axis=0)), axis=1,
+)
+observation_index = np.flatnonzero(in_range)[0]
+true_inputs = split.test.inputs[observation_index:observation_index + 1].copy()
+y_obs = split.test.outputs[observation_index:observation_index + 1].copy()
+same_setting = np.all(split.test.inputs == true_inputs[0], axis=1)
+replicates = split.test.outputs[same_setting]
+draws = nf.sample(true_inputs, n_samples=100, seed=13)[0]
 ```
 
 ```{python}
 #| code-fold: true
-#| code-summary: "Plot the observation and likelihood curves"
-#| fig-cap: "iTARFlow trained on the synthetic Gaussian-response bank. Both log-density curves are shifted to their own maximum for a shape comparison; these are likelihoods, not posterior distributions."
-fig, axes = plt.subplots(1, 2, figsize=(10, 3.5))
-axes[0].plot(times, observation[0, :, 0], "o", label="Held-out observation")
-axes[0].plot(times, true_theta * (1 + times), "--", label="Simulator mean")
-axes[0].set(xlabel="Time", ylabel="Response")
-axes[0].legend()
-axes[1].plot(candidates, learned - learned.max(), label="Surrogate")
-axes[1].plot(candidates, known - known.max(), "--", label="Known Gaussian model")
-axes[1].axvline(true_theta, color="grey", linestyle=":", label="Generating theta")
-axes[1].set(xlabel="Candidate theta", ylabel="Log density minus maximum", ylim=(-15, 1))
-axes[1].legend(fontsize=8)
+#| code-summary: "Compare surrogate samples with held-out SIRDS trajectories"
+#| fig-cap: "iTARFlow fitted to the bundled SIRDS training split: surrogate samples at one held-out parameter setting, compared with its five SIRDS realisations. Shading is the pointwise 5th–95th percentile of 100 surrogate draws, not a posterior interval."
+low, high = np.quantile(draws, [0.05, 0.95], axis=0)
+fig, axes = plt.subplots(2, 2, figsize=(9, 5), sharex=True)
+for j, ax in enumerate(axes.flat):
+    ax.fill_between(bank.times, low[:, j], high[:, j], alpha=0.2,
+                    color="C0", label="Surrogate 90% band")
+    ax.plot(bank.times, draws.mean(axis=0)[:, j], color="C0", label="Surrogate mean")
+    ax.plot(bank.times, replicates[:, :, j].T, color="0.6", alpha=0.6)
+    ax.plot(bank.times, y_obs[0, :, j], color="black", label="Held-out observation")
+    ax.set(title=bank.output_names[j], xlabel="Time (days)", ylabel="People")
+axes[0, 0].legend(fontsize=7)
 fig.tight_layout()
 plt.show()
 ```
 
-The rendered short fit has a much heavier right tail than the known likelihood.
-That would distort parameter inference even though the response trajectories
-look plausible. Validate likelihood shape and calibration before using a
-surrogate for inference; accurate mean predictions alone are not enough.
+This short fit illustrates the interface. The plots reveal where its samples
+miss the SIRDS trajectories; they do not establish that its likelihood is
+adequate for parameter inference.
 
-## Differentiate in original units
+## Evaluating the likelihood
 
-`log_prob_tensor` keeps the computation connected to PyTorch's automatic
-differentiation. The saved scalers and the density's change-of-variables
-correction are applied internally.
+`log_prob` accepts inputs and trajectories in their original units. To inspect
+its dependence on transmission rate, vary $\beta$ while holding the other four
+inputs at their generating values:
 
 ```{python}
-theta = torch.tensor([[true_theta]], dtype=torch.float32, requires_grad=True)
-observed = torch.tensor(observation.copy())
-log_density = model.log_prob_tensor(theta, observed)
-gradient, = torch.autograd.grad(log_density.sum(), theta)
-print("Log density:", log_density.detach().tolist())
-print("Derivative with respect to theta:", gradient.tolist())
+beta_index = bank.input_names.index("beta")
+beta = np.linspace(split.train.inputs[:, beta_index].min(),
+                   split.train.inputs[:, beta_index].max(), 100)
+candidates = np.repeat(true_inputs, len(beta), axis=0)
+candidates[:, beta_index] = beta
+log_density = nf.log_prob(candidates, np.repeat(y_obs, len(beta), axis=0))
 ```
 
-## From likelihood to inference
+```{python}
+#| fig-cap: "iTARFlow fitted to the bundled SIRDS training split: conditional log-density slice for one held-out SIRDS trajectory, with I₀, γ, ω and μ fixed to their generating values. The curve is shifted to its maximum; it is not a marginal likelihood or posterior."
+fig, ax = plt.subplots(figsize=(7, 3))
+ax.plot(beta, log_density - log_density.max())
+ax.axvline(true_inputs[0, beta_index], color="black", linestyle="--",
+           label="Generating beta")
+ax.set(xlabel="Transmission rate, beta", ylabel="Log density minus maximum")
+ax.legend()
+fig.tight_layout()
+plt.show()
+```
 
-With observed data $y$ and a separately chosen prior $p(\theta)$, an approximate
-posterior would be
+For gradient-based methods, `log_prob_tensor` keeps the calculation connected
+to PyTorch's automatic differentiation. Scaling and its density correction
+are handled inside the package:
+
+```{python}
+theta = torch.tensor(true_inputs, requires_grad=True)
+observed = torch.tensor(y_obs)
+log_likelihood = nf.log_prob_tensor(theta, observed)
+gradient, = torch.autograd.grad(log_likelihood.sum(), theta)
+print("Log density:", float(log_likelihood.detach()[0]))
+print("Gradient in original input units:")
+for name, value in zip(bank.input_names, gradient[0].tolist()):
+    print(f"  {name}: {value:.3f}")
+```
+
+SIRDS has integer counts and a fixed population total. A continuous flow does
+not enforce this support, and its density is not a discrete trajectory
+probability. Before interpreting a posterior, validate an appropriate
+likelihood or observation model, simulation coverage and inference diagnostics.
+No observation-error model is added in this tutorial.
+
+## Choosing the prior
+
+For the **optional inference recipes** below, suppose we want to infer the
+initial infected fraction $I_0$, transmission $\beta$, recovery $\gamma$ and
+waning $\omega$, holding mortality $\mu$ known. The example uniform priors are:
 
 $$
-p(\theta\mid y)\propto p_{\mathrm{surrogate}}(y\mid\theta)p(\theta).
+\begin{aligned}
+I_0 &\sim \mathcal U(0.01, 0.1), &
+\beta &\sim \mathcal U(0.2, 0.8),\\
+\gamma &\sim \mathcal U(0.05, 0.3), &
+\omega &\sim \mathcal U(0.005, 0.05).
+\end{aligned}
 $$
 
-MCMC samples this target. Variational inference instead fits a tractable
-approximation $q_\psi(\theta)$, for example by maximizing
+These are choices for the example, not priors selected by METIS. They must be
+scientifically justified and covered by a validated simulation bank before
+use. The small bundled bank and short fit above are not that validation.
+
+## The inference problem
+
+Given observation $y_{\mathrm{obs}}$, prior $p(\theta)$ and the fitted surrogate,
+the unnormalised approximate posterior is
 
 $$
-\mathcal L(\psi)=\mathbb E_{q_\psi}\left[
-\log p_{\mathrm{surrogate}}(y\mid\theta)+\log p(\theta)-\log q_\psi(\theta)
+p(\theta\mid y_{\mathrm{obs}})\propto
+\hat p(y_{\mathrm{obs}}\mid\theta)\,p(\theta).
+$$
+
+VI fits a tractable distribution to this target; MCMC generates samples from
+it. The following code is an **unexecuted advanced recipe**, rather than
+reported inference results. It uses the same SIRDS observation and the public
+likelihood interface demonstrated above.
+
+```python
+import torch.distributions as dist
+from torch import nn
+
+parameter_names = ["I_0", "beta", "gamma", "omega"]
+lo = torch.tensor([0.01, 0.2, 0.05, 0.005])
+hi = torch.tensor([0.1, 0.8, 0.3, 0.05])
+known_mu = float(true_inputs[0, bank.input_names.index("mu")])
+
+# Freeze fitted neural weights while preserving gradients through the inputs.
+nf.model.requires_grad_(False)
+
+def make_inputs(theta_samples):
+    values = dict(zip(parameter_names, theta_samples.unbind(dim=1)))
+    values["mu"] = torch.full_like(theta_samples[:, 0], known_mu)
+    return torch.stack([values[name] for name in nf.input_names], dim=1)
+
+def compute_log_likelihood(theta_samples):
+    return nf.log_prob_tensor(
+        make_inputs(theta_samples),
+        observed.expand(len(theta_samples), -1, -1),
+    )
+```
+
+## Variational inference
+
+Introduce a parametrised distribution $q_\phi(\theta)$ and maximise the evidence
+lower bound (ELBO):
+
+$$
+\max_\phi\;\mathbb E_{q_\phi}\left[
+\log\hat p(y_{\mathrm{obs}}\mid\theta)+\log p(\theta)-\log q_\phi(\theta)
 \right].
 $$
 
-The neural weights here are point estimates. Surrogate draws represent learned
-simulation variability, not uncertainty in those weights. Real observations,
-integer counts or measurement error may need an observation model before this
-continuous density is suitable. Keep inference inside the validated input
-region, and check identifiability, convergence and posterior predictions.
+This is equivalent to minimising the reverse KL divergence from $q_\phi$ to
+the approximate posterior. As in the original workflow, use a multivariate
+Gaussian transformed into the parameter bounds:
 
-The [historical VI/MCMC recipe](https://github.com/OJWatson/metis/blob/739d57cdaa5f74b9a0973c527f063eaa3a72ab06/quarto/sbi/vi-mcmc.qmd)
-shows a longer application using the former API. See
-[migration](../package/migration.qmd) before reusing its checkpoints.
+```python
+import torch.nn.functional as F
+
+n_params = len(parameter_names)
+q_mu = nn.Parameter(torch.zeros(n_params))
+q_L_flat = nn.Parameter(torch.zeros(n_params * (n_params + 1) // 2))
+
+def build_q():
+    L = torch.zeros(n_params, n_params)
+    row, column = torch.tril_indices(n_params, n_params)
+    L[row, column] = q_L_flat
+    diagonal = torch.arange(n_params)
+    L[diagonal, diagonal] = F.softplus(L[diagonal, diagonal])
+    base = dist.MultivariateNormal(q_mu, scale_tril=L)
+    return dist.TransformedDistribution(base, [
+        dist.SigmoidTransform(), dist.AffineTransform(lo, hi - lo),
+    ])
+
+optimizer = torch.optim.Adam([q_mu, q_L_flat], lr=0.02)
+elbo_history = []
+for step in range(1500):
+    optimizer.zero_grad()
+    q = build_q()
+    theta_samples = q.rsample((32,))
+    log_prior = -torch.log(hi - lo).sum()
+    elbo = (compute_log_likelihood(theta_samples)
+            + log_prior - q.log_prob(theta_samples)).mean()
+    (-elbo).backward()
+    optimizer.step()
+    elbo_history.append(float(elbo.detach()))
+
+with torch.no_grad():
+    vi_samples = build_q().sample((5000,)).numpy()
+
+fig, ax = plt.subplots(figsize=(7, 3))
+ax.plot(elbo_history)
+ax.set(xlabel="VI step", ylabel="ELBO")
+plt.show()
+```
+
+Check convergence from different initialisations. An improving ELBO alone does
+not show that the approximation represents every posterior mode or correlation.
+
+## MCMC
+
+Pyro's No-U-Turn Sampler (NUTS) can sample the same surrogate-based target. Pyro
+is optional; add it to your uv project before running this recipe:
+
+```bash
+uv add pyro-ppl
+```
+
+Each `pyro.sample` declares a prior, and `pyro.factor` contributes the surrogate
+log likelihood. Pyro handles the transforms for bounded parameters.
+
+```python
+import pyro
+import pyro.distributions as pyro_dist
+from pyro.infer import MCMC, NUTS
+
+pyro.set_rng_seed(42)
+
+def posterior_model():
+    theta = torch.stack([
+        pyro.sample(name, pyro_dist.Uniform(lo[i], hi[i]))
+        for i, name in enumerate(parameter_names)
+    ])
+    pyro.factor("surrogate_likelihood", compute_log_likelihood(theta[None])[0])
+
+kernel = NUTS(posterior_model, full_mass=True, target_accept_prob=0.8)
+mcmc = MCMC(kernel, warmup_steps=500, num_samples=1000, num_chains=1)
+mcmc.run()
+mcmc.summary(prob=0.95)
+mcmc_draws = mcmc.get_samples()
+mcmc_samples = torch.stack([mcmc_draws[name] for name in parameter_names], dim=1)
+```
+
+Warmup adapts the sampler and is discarded. This notebook-style recipe shows
+one chain; scientific inference needs independently initialised chains, mixing
+and effective-sample-size checks, divergence checks and between-chain
+convergence diagnostics.
+
+### Comparing VI and MCMC
+
+Plot both sets of marginal samples, then examine joint parameter relationships
+and trace plots. Agreement between the methods does not establish that the
+surrogate likelihood itself is accurate.
+
+```python
+fig, axes = plt.subplots(1, 4, figsize=(12, 3))
+for j, ax in enumerate(axes):
+    ax.hist(vi_samples[:, j], bins=30, density=True, histtype="step", label="VI")
+    ax.hist(mcmc_samples[:, j].numpy(), bins=30, density=True,
+            histtype="step", label="MCMC")
+    generating = true_inputs[0, bank.input_names.index(parameter_names[j])]
+    ax.axvline(generating, color="black", linestyle="--", label="Generating value")
+    ax.set(xlabel=parameter_names[j], ylabel="Density")
+axes[0].legend()
+fig.tight_layout()
+plt.show()
+```
+
+### Posterior predictive checks
+
+Generate SIRDS surrogate trajectories at posterior parameter draws and compare
+with the observed trajectory. Do not clip negative counts or enforce
+conservation after sampling: those discrepancies help reveal a poor surrogate.
+
+```python
+selected = mcmc_samples[:100]
+posterior_inputs = make_inputs(selected).detach().numpy()
+posterior_predictive = nf.sample(posterior_inputs, n_samples=1, seed=42)[:, 0]
+
+fig, axes = plt.subplots(2, 2, figsize=(9, 5), sharex=True)
+for j, ax in enumerate(axes.flat):
+    ax.plot(bank.times, posterior_predictive[:, :, j].T, color="C0", alpha=0.1)
+    ax.plot(bank.times, y_obs[0, :, j], color="black", label="Observation")
+    ax.set(title=bank.output_names[j], xlabel="Time (days)", ylabel="People")
+axes[0, 0].legend()
+fig.tight_layout()
+plt.show()
+```
+
+These posterior samples would describe parameter uncertainty under the chosen
+prior and fitted surrogate. They do not include uncertainty in the fitted
+neural weights. For SIRDS, a further check is to run the actual simulator at
+posterior draws and compare those trajectories with the observation.

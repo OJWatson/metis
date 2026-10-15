@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Restore the original documentation sequence and explanations, using SIRDS
+  throughout the installed-package walkthrough and runnable examples.
+- Fold the separate package tutorials into the original Basics and model pages,
+  retaining redirects, executed outputs and notebook/Colab support.
+
 - Execute tutorials during the documentation build and publish their plots,
   tables and downloadable notebooks with saved outputs.
 - Add Open in Colab links with shared, revision-pinned uv setup.

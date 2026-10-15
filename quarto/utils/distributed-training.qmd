@@ -1,49 +1,56 @@
 ---
-title: "Training on multiple devices"
+title: "Training on multiple GPUs"
 ---
 
-![Forms of parallelism, from @raschka2023sometechniquestomakeyourpytorchmodel](images/forms_of_parallelism.png)
+![Common forms of parallelism during training, from @raschka2023sometechniquestomakeyourpytorchmodel.](images/forms_of_parallelism.png)
 
-The installed API supports data parallelism: workers process different parts
-of a global minibatch and average gradients before an optimizer update. Model
-parallelism and multi-node launching are not supplied by this interface.
+METIS can use multiple GPUs on one machine through *data parallelism*.
+Identical copies of the model process different parts of a batch, then average
+their gradients before updating the model. More involved forms of parallelism,
+such as splitting one model across machines, are outside this interface.
 
-## Configure devices
+## From one to four GPUs
 
-After the [CUDA setup](../basics/installing_metis.qmd#optional-cuda-setup):
-
-```bash
-uv run metis train training.device=cuda training.num_devices=4 training.batch_size=128
-```
-
-`batch_size` is global and must divide evenly by `num_devices`; here each worker
-processes 32 realizations. CUDA workers use NCCL and contiguous devices starting
-at the selected CUDA index. Restrict visible GPUs when necessary:
+After [setting up CUDA](../basics/installing_metis.qmd#optional-cuda-setup), our
+usual single-GPU command for the bundled SIRDS bank is:
 
 ```bash
-CUDA_VISIBLE_DEVICES=2,3 uv run metis train training.device=cuda training.num_devices=2 training.batch_size=128
+uv run metis train training.device=cuda
 ```
 
-CPU workers use Gloo:
+To use four GPUs on the same machine, set `training.num_devices`:
 
 ```bash
-uv run metis train training.device=cpu training.num_devices=2 training.batch_size=128
+uv run metis train training.device=cuda training.num_devices=4
 ```
 
-This is useful for correctness checks; multiprocessing overhead can make small
-CPU jobs slower. One device remains the default. Device minibatching does not
-make the simulation bank out of core: it must still fit in host memory.
+METIS starts a worker process for each GPU. Hydra configuration, output
+directories, checkpoints and W&B logging use the same workflow as a single GPU.
 
-The Python equivalent is `TrainingConfig(device="cuda", num_devices=4,
-batch_size=128)`. Launch multiprocessing scripts under
-`if __name__ == "__main__":`; use the installed CLI for a straightforward
-notebook-to-terminal transition. Checkpoint resume requires the same topology.
+To use only GPUs 2 and 3, restrict which devices are visible:
+
+```bash
+CUDA_VISIBLE_DEVICES=2,3 uv run metis train training.device=cuda training.num_devices=2
+```
+
+## Batch size
+
+`training.batch_size` is the global batch size and must be divisible by
+`training.num_devices`. For example, a batch size of 128 with four GPUs gives
+each GPU 32 realisations per optimiser step.
+
+From Python, the equivalent is
+`TrainingConfig(device="cuda", num_devices=4, batch_size=128)`. Put the training
+call inside `if __name__ == "__main__":` when launching multiprocessing scripts.
+The installed CLI is the simpler way to launch a distributed run from a
+terminal.
 
 ## Troubleshooting
 
-- Check visible GPU count and PyTorch CUDA availability before selecting CUDA.
-- Check global batch-size divisibility.
-- Use `NCCL_DEBUG=INFO` to investigate CUDA communication failures.
-- Establish a successful one-device run before diagnosing distributed behavior.
+- Confirm that `nvidia-smi` lists the GPUs you intend to use and that PyTorch can access CUDA.
+- Check that the global batch size is divisible by the device count.
+- Set `NCCL_DEBUG=INFO` when diagnosing CUDA communication failures.
+- Establish a successful single-GPU run before adding more devices.
 
-A passing CPU distributed test does not validate a CUDA driver/NCCL stack.
+The full simulation bank still needs to fit in host memory. Resuming a training
+checkpoint requires the same device topology as the saved run.

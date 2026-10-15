@@ -1,62 +1,181 @@
 ---
-title: "Hydra basics"
+title: "Hydra crash course"
+aliases:
+  - /package/hydra.html
 ---
 
-Hydra lets you choose a dataset, model and training settings without editing
-Python. METIS includes default configurations in the installed package.
+METIS can be configured end-to-end with [Hydra](https://hydra.cc). You don't
+need to touch Python to change models, datasets or training settings — you
+compose and override Hydra configs instead. The configs call the same package
+functions used in the Python examples.
 
-## Start from the defaults
+## Hydra basics
+
+Hydra's configuration files are simple text-based [YAML](https://yaml.org/about/)
+files. For example, part of a training configuration might look like this:
+
+```yaml
+training:
+  steps: 1000
+  learning_rate: 0.001
+```
+
+Once read by the program, these values can be accessed as
+`config.training.steps` and `config.training.learning_rate`. You can change
+settings without editing the program itself.
+
+Rather than putting every setting in one file, Hydra lets us compose a
+configuration from smaller files. METIS installs these with the package:
+
+```text
+metis/conf/
+├── config.yaml
+├── dataset/
+│   ├── example.yaml
+│   └── parquet.yaml
+├── model/
+│   ├── mlp.yaml
+│   ├── transformer.yaml
+│   ├── flow_matching.yaml
+│   └── itarflow.yaml
+└── training/
+    └── default.yaml
+```
+
+The main `config.yaml` chooses one file from each group using a `defaults` list:
+
+```yaml
+defaults:
+  - dataset: example
+  - model: mlp
+  - training: default
+  - _self_
+```
+
+This loads `dataset/example.yaml`, `model/mlp.yaml` and `training/default.yaml`.
+`_self_` means that values written in the main config are applied after those
+defaults. The resulting configuration combines the dataset, model and training
+settings into one experiment.
+
+You can inspect the complete configuration without training:
 
 ```bash
 uv run metis train --cfg job
 ```
 
-This prints the configuration without training. Its main groups are `dataset`,
-`model` and `training`. Each group is a small YAML file; Hydra combines them
-into one experiment configuration.
-
-To select the transformer and change the training budget:
+When running a job, override a group or an individual value on the command line:
 
 ```bash
 uv run metis train model=transformer training.steps=1000
 ```
 
-`model=transformer` selects a configuration. `training.steps=1000` overrides a
-value inside one. Nested settings use dots in the same way:
+Here `model=transformer` selects a different YAML file, while
+`training.steps=1000` changes one value. The dataset remains the bundled SIRDS
+example. To change a setting within the MLP configuration:
 
 ```bash
 uv run metis train model=mlp model.model_options.hidden_dim=128
 ```
 
-## What is in a configuration?
+These commands work from your own project directory. The `metis` command is
+installed with the package; it does not need a `train.py` file in your project.
+`uv run metis-train` is an equivalent entry point.
 
-For example, the MLP configuration contains:
+::: {.callout-tip}
+Hydra has many more features not mentioned here. The
+[Hydra tutorials](https://hydra.cc/docs/tutorials/intro/) explain configuration
+groups, composition and command-line overrides in more detail.
+:::
 
-```yaml
-_target_: metis.Surrogate
-_convert_: all
-model: mlp
-observed_outputs: []
-model_options:
-  hidden_dim: 64
-  num_blocks: 2
-  num_layers_per_block: 2
+## Writing a config for our data
+
+```{mermaid}
+%%| echo: false
+graph TD
+    A[Dataset config] --> D[Experiment config]
+    B[Model config] --> D
+    C[Training config] --> D
+    style A fill:#4a90d9,color:#fff,stroke:none
+    style B fill:#7b61ff,color:#fff,stroke:none
+    style C fill:#548c56,color:#fff,stroke:none
+    style D fill:#e06c75,color:#fff,stroke:none
 ```
 
-`_target_` tells Hydra which Python constructor to call. The remaining values
-are its arguments; `_convert_: all` converts YAML collections into ordinary
-Python lists and dictionaries.
+For our first experiment we can keep the model and training defaults and add
+one dataset config. In [preparing data](preparing-data.qmd), we saved our SIRDS
+simulations as `sirds_data.parquet`. Create a `configs/dataset` directory in
+your project and save the following as `sirds.yaml`:
 
-## Try several settings
+```yaml
+_target_: metis.SimulationDataset.from_parquet
+path: sirds_data.parquet
+inputs:
+  - I_0
+  - beta
+  - gamma
+  - omega
+  - mu
+outputs:
+  - S_t
+  - I_t
+  - R_t
+  - D_t
+groups: null
+time: t
+replicate: rep
+```
+
+`_target_` tells Hydra to call `SimulationDataset.from_parquet`; the other
+entries are its arguments. `inputs` are the static parameters we condition on
+and `outputs` are the trajectories we want to predict. With `groups: null`,
+replicates with the same input parameters are kept together when splitting the
+bank. If your bank has a separate scenario identifier, supply its column name
+in a list, for example `groups: [scenario]`.
+
+Your project now contains:
+
+```text
+my-surrogate/
+├── pyproject.toml
+├── uv.lock
+├── sirds_data.parquet
+└── configs/
+    └── dataset/
+        └── sirds.yaml
+```
+
+Tell Hydra where to find this additional configuration:
+
+```bash
+uv run metis train --config-dir "$PWD/configs" dataset=sirds model=mlp training.steps=1000
+```
+
+Hydra combines your dataset file with the installed model and training defaults.
+You do not need to copy or edit the package's configuration files. Relative data
+paths are resolved from the directory where you run the command. For a quick
+check without creating YAML, the same dataset can be selected with overrides:
+
+```bash
+uv run metis train dataset=parquet dataset.path=sirds_data.parquet 'dataset.inputs=[I_0,beta,gamma,omega,mu]' 'dataset.outputs=[S_t,I_t,R_t,D_t]'
+```
+
+Each job saves its resolved configuration, trained model, training history and
+evaluation results under `outputs/`. With plotting support installed, add
+`plot.enabled=true` to save a comparison figure.
+
+## Trying several settings {#sweeps}
+
+Hydra's `--multirun` option runs combinations of settings:
 
 ```bash
 uv run metis train --multirun model=mlp,transformer training.learning_rate=0.001,0.0003 evaluation.partition=validation
 ```
 
-This runs four combinations and saves each run in its own directory. Choose
-settings using validation data; keep the test data for the final evaluation.
+This runs four experiments. Compare validation results when choosing settings,
+and keep the test partition for the final evaluation. The
+[sweeping tutorial](../sweeping/overview.qmd) develops this further.
 
-For your own bank, reusable YAML files and tracking, continue to
-[experiments with Hydra](../package/hydra.qmd). The
-[Hydra tutorials](https://hydra.cc/docs/tutorials/intro/) explain more advanced
-configuration features.
+With the optional W&B dependency, add `wandb.enabled=true` to track a run;
+[Weights & Biases](../sweeping/wandb.qmd) explains setup and tracking.
+
+Next, [train our first surrogates](training.qmd) and compare their SIRDS predictions.

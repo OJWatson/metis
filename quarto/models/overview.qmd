@@ -1,20 +1,31 @@
 ---
 title: "Overview of the models"
+aliases:
+  - /package/model-choice.html
 ---
 
-METIS ships several model families. This page gives a very high-level comparison
+METIS ships several model families. This page gives a high-level comparison
 so you can pick a starting point; each model has its own page with detail.
+All worked examples use the same [SIRDS model](../basics/sirds-example.qmd).
 
 | Model | Stochastic | Training cost | Inference cost | Sequence conditioning | Exact density |
 |-------|:-----------:|:-------------:|:--------------:|:---------------------:|:----------------:|
-| [MLP](mlp.qmd) | ❌ | Low | Low | ❌ | ❌ |
-| [Transformer](transformer.qmd) |❌ | High| Medium| ✅ |❌ |
-| [Flow Matching](flow-matching.qmd) |✅  | High| High| ✅ |❌ |
-| [Normalising Flow](normalising-flow.qmd) | ✅| Medium| Medium| ❌ | ✅|
+| [MLP](mlp.qmd) | No | Low | Low | No | No |
+| [Transformer](transformer.qmd) | No | High | Medium | Yes | No |
+| [Flow Matching](flow-matching.qmd) | Yes | High | High | Yes | No |
+| [Normalising Flow](normalising-flow.qmd) | Yes | Medium | Medium | No | Yes |
 
-Compute descriptions are qualitative, not a benchmark ranking: cost depends on
-model size, horizon, hardware and sample count. Exact density means density of
-the fitted continuous flow, not the exact simulator likelihood. The
-[model-choice guide](../package/model-choice.qmd) gives a practical comparison
-workflow; [conditioning](../package/conditioning.qmd) explains causal history
-versus full-path information.
+Start with an **MLP** when you need a fast, deterministic prediction from static
+inputs. Try a **transformer** when temporal structure or an observed sequence
+matters. Use **flow matching** or **normalising flow** when you need to reproduce
+variation between simulator runs; choose a normalising flow if you also need to
+evaluate the fitted surrogate's density.
+
+These compute costs are rough guides, not benchmark results. Compare models on
+the same validation split, then assess the chosen model on held-out simulations
+as in the [training tutorial](../basics/training.qmd). A more complex model is
+only useful if it improves the predictions you need.
+
+Sequence conditioning uses past observations in the transformer and the full
+supplied path in flow matching. Exact density refers to the fitted continuous
+flow, not the exact likelihood of the simulator.
