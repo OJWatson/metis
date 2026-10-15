@@ -37,6 +37,8 @@ jobs:
         run: quarto render quarto --to all --no-execute
       - name: Check local documentation links and assets
         run: python scripts/check_site_links.py quarto/_site
+      - name: Execute the downloadable beginner notebook
+        run: python scripts/check_tutorial_notebook.py quarto/_site/package/quickstart.ipynb
       - uses: actions/upload-pages-artifact@v4
         with:
           path: quarto/_site

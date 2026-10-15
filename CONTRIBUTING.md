@@ -37,10 +37,11 @@ the docs extra, and run:
 ~~~bash
 quarto render quarto --to all --no-execute
 python scripts/check_site_links.py quarto/_site
+python scripts/check_tutorial_notebook.py quarto/_site/package/quickstart.ipynb
 python examples/package_quickstart.py --steps 20 --output /tmp/metis-example
 ~~~
 
-The beginner example is executed in CI separately from site rendering.
+The beginner example and generated notebook are executed in CI separately from site rendering.
 Advanced historical pages may intentionally disable costly training cells.
 The website is deployed by the documentation workflow after a push to main.
 

@@ -1,5 +1,7 @@
 ---
 title: "Train and reuse your first surrogate"
+execute:
+  eval: false
 ---
 
 This example uses a bundled SIRDS simulation bank: 100 parameter groups, five
@@ -24,7 +26,7 @@ the existing `metis` PyPI project is unrelated.
 
 ## Train in Python
 
-```python
+```{python}
 from metis import load_example, Surrogate, TrainingConfig
 
 bank = load_example()
@@ -49,7 +51,7 @@ performance only after the choice is made.
 
 ## Reload and predict
 
-```python
+```{python}
 restored = Surrogate.load("surrogate.pt")
 prediction = restored.predict({
     "I_0": 0.04, "beta": 0.4, "gamma": 0.15, "omega": 0.02, "mu": 0.02
