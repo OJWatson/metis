@@ -51,7 +51,8 @@ for a different simulator.
 
 ## Read the training history
 
-`model.history` records the training and validation loss at each evaluation step.
+`model.history` records training loss at each optimizer step and validation loss
+at each evaluation step.
 W&B can plot these records live; see [tracking with Hydra or Python](hydra.qmd).
 The restored model uses the best evaluated validation checkpoint, which may be
 earlier than the final training step. Inspect `model.training_metadata`.

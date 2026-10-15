@@ -135,7 +135,12 @@ def evaluate(
     """
     if tuple(data.input_names) != tuple(surrogate.input_names):
         raise ValueError("Evaluation input columns/order differ from the fitted schema")
-    if tuple(data.output_names) != tuple(surrogate.output_names):
+    training_outputs = getattr(
+        surrogate, "training_output_names", surrogate.output_names
+    )
+    observed_names = getattr(surrogate, "observed_outputs", ())
+    output_names = tuple(surrogate.output_names)
+    if tuple(data.output_names) != tuple(training_outputs):
         raise ValueError(
             "Evaluation output columns/order differ from the fitted schema"
         )
@@ -157,8 +162,10 @@ def evaluate(
             raise ValueError("Stochastic evaluation requires n_samples >= 2")
         if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**63:
             raise ValueError("seed must be an integer between 0 and 2**63 - 1")
-    specification = _validated_constraints(data.output_names, constraints)
-    truth = np.asarray(data.outputs, dtype=np.float64)
+    specification = _validated_constraints(output_names, constraints)
+    predicted_idx = [data.output_names.index(name) for name in output_names]
+    observed_idx = [data.output_names.index(name) for name in observed_names]
+    truth = np.asarray(data.outputs[:, :, predicted_idx], dtype=np.float64)
     if truth.ndim != 3 or not truth.size or not np.isfinite(truth).all():
         raise ValueError(
             "Observed outputs must be a nonempty finite (run, time, output) array"
@@ -173,6 +180,11 @@ def evaluate(
     for start in range(0, len(truth), batch_size):
         stop = min(start + batch_size, len(truth))
         observed = truth[start:stop]
+        conditioning = (
+            {"conditioning": data.outputs[start:stop, :, observed_idx]}
+            if observed_names
+            else {}
+        )
         if stochastic:
             assert lower is not None and upper is not None
             batch_seed = (
@@ -192,6 +204,7 @@ def evaluate(
                     seed=batch_seed,
                     num_steps=num_steps,
                     solver=solver,
+                    **conditioning,
                 ),
                 dtype=np.float64,
             )
@@ -218,7 +231,8 @@ def evaluate(
             crps_sum += crps.sum(axis=(0, 1))
         else:
             values = np.asarray(
-                surrogate.predict(data.inputs[start:stop]), dtype=np.float64
+                surrogate.predict(data.inputs[start:stop], **conditioning),
+                dtype=np.float64,
             )
             if values.shape != observed.shape or not np.isfinite(values).all():
                 raise ValueError("Predictions have invalid shape or non-finite values")
@@ -226,7 +240,7 @@ def evaluate(
         # Every batch has the same time grid, outputs, and sample count, so run
         # counts provide exact weights for aggregating violation fractions.
         for name, fraction in _check_constraints(
-            values, data.output_names, specification
+            values, output_names, specification
         ).items():
             physical[name] = physical.get(name, 0.0) + fraction * (stop - start) / len(
                 truth
@@ -240,7 +254,7 @@ def evaluate(
     }
     records = [
         {"output": name, "rmse": float(output_rmse[i]), "mae": float(output_mae[i])}
-        for i, name in enumerate(data.output_names)
+        for i, name in enumerate(output_names)
     ]
     if stochastic:
         count = len(truth) * truth.shape[1]
@@ -274,6 +288,11 @@ def evaluate(
             "mae": float(np.abs(error[idx]).mean()),
         }
         identical_inputs = np.all(data.inputs[idx] == data.inputs[idx[0]])
+        if observed_names:
+            identical_inputs = identical_inputs and np.all(
+                data.outputs[idx][:, :, observed_idx]
+                == data.outputs[idx[0]][:, observed_idx]
+            )
         if identical_inputs:
             mean_error = prediction[idx].mean(axis=0) - truth[idx].mean(axis=0)
             row["replicate_mean_rmse"] = float(np.sqrt(np.mean(mean_error**2)))
@@ -311,19 +330,41 @@ def evaluate(
         "validation_fingerprint": training.get("validation_fingerprint"),
         "n_runs": len(truth),
         "n_groups": len(groups),
+        "observed_outputs": list(observed_names),
+        "predicted_outputs": list(output_names),
+        "conditioning": (
+            "full observed trajectory; not a causal forecast"
+            if surrogate.model_name == "flow_matching"
+            else "observed history strictly before each predicted time"
+        )
+        if observed_names
+        else None,
         "prediction": "Monte Carlo mean"
         if stochastic
-        else "autonomous deterministic prediction",
+        else (
+            "conditional deterministic prediction"
+            if observed_names
+            else "autonomous deterministic prediction"
+        ),
         "n_samples": n_samples if stochastic else None,
         "seed": seed if stochastic else None,
         "batch_size": batch_size,
+        "inference_batch_size": getattr(
+            getattr(surrogate, "training_config", None), "batch_size", None
+        ),
+        "inference_device": str(surrogate.device)
+        if hasattr(surrogate, "device")
+        else None,
+        "sampling_chunk_note": "Changing evaluation or internal inference batch size may change seeded Monte Carlo draws"
+        if stochastic
+        else None,
         "sampling_seed_scheme": "first batch: seed; subsequent batches: SeedSequence([seed, start]) uint64 modulo 2**63"
         if stochastic
         else None,
         "flow_steps": num_steps if surrogate.model_name == "flow_matching" else None,
         "flow_solver": solver if surrogate.model_name == "flow_matching" else None,
         "units": "original output units; aggregate RMSE/MAE weight every scalar equally",
-        "replicate_mean_weighting": "equal weight per group with identical replicate inputs; other groups excluded from this metric",
+        "replicate_mean_weighting": "equal weight per group with identical static inputs and conditioning trajectories; other groups excluded from this metric",
         "uncertainty": "Pointwise predictive variability under the fitted surrogate; no surrogate-error confidence intervals or simultaneous trajectory bands.",
         "crps_estimator": "finite empirical ensemble CRPS (pair denominator n_samples squared)"
         if stochastic
@@ -371,7 +412,7 @@ def _model_provenance(surrogate):
     training = surrogate.training_metadata
     history = getattr(surrogate, "history", None)
     completed_steps = training.get("completed_steps")
-    if completed_steps is None and history is not None:
+    if completed_steps is None and history and "legacy_import" not in training:
         completed_steps = len(history)
     best_step = training.get("best_step")
     selected_step = best_step if best_step is not None else completed_steps
@@ -390,6 +431,7 @@ def _model_provenance(surrogate):
         "training_config": _plain_provenance(
             training.get("config", getattr(surrogate, "training_config", None))
         ),
+        "legacy_import": _plain_provenance(training.get("legacy_import")),
         "training_summary": _plain_provenance(
             {
                 "completed_steps": completed_steps,
@@ -407,7 +449,7 @@ def _model_provenance(surrogate):
             "numpy": np.__version__,
         },
         "model_fingerprint": None,
-        "model_fingerprint_schema": "metis-model-v1",
+        "model_fingerprint_schema": "metis-model-v2",
         "model_fingerprint_status": "unavailable: architecture, fitted scalers and neural state are required",
     }
     model = getattr(surrogate, "model", None)
@@ -437,6 +479,12 @@ def _model_provenance(surrogate):
         "resolved_model_options": result["resolved_model_options"],
         "input_names": list(surrogate.input_names),
         "output_names": list(surrogate.output_names),
+        "observed_outputs": list(getattr(surrogate, "observed_outputs", ())),
+        "conditioning_scaler": _plain_provenance(
+            surrogate.conditioning_scaler.to_dict()
+        )
+        if getattr(surrogate, "conditioning_scaler", None) is not None
+        else None,
         "times": _plain_provenance(surrogate.times),
         "input_scaler": _plain_provenance(input_scaler.to_dict()),
         "output_scaler": _plain_provenance(output_scaler.to_dict()),

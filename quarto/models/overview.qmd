@@ -10,8 +10,11 @@ so you can pick a starting point; each model has its own page with detail.
 | [MLP](mlp.qmd) | ❌ | Low | Low | ❌ | ❌ |
 | [Transformer](transformer.qmd) |❌ | High| Medium| ✅ |❌ |
 | [Flow Matching](flow-matching.qmd) |✅  | High| High| ✅ |❌ |
-| [Normalising Flow](normalising-flow.qmd) | ✅| Medium| Medium|👷  | ✅|
+| [Normalising Flow](normalising-flow.qmd) | ✅| Medium| Medium| ❌ | ✅|
 
-<!-- TODO: fill the table and add a sentence on how to read each column
-(stochastic vs deterministic, relative compute, whether it supports conditioning
-on a sequence, whether an exact likelihood is available). -->
+Compute descriptions are qualitative, not a benchmark ranking: cost depends on
+model size, horizon, hardware and sample count. Exact density means density of
+the fitted continuous flow, not the exact simulator likelihood. The
+[model-choice guide](../package/model-choice.qmd) gives a practical comparison
+workflow; [conditioning](../package/conditioning.qmd) explains causal history
+versus full-path information.

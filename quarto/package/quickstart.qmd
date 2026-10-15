@@ -163,3 +163,11 @@ uv run metis train model=mlp training.device=cuda
 For Python code, set `TrainingConfig(device="cuda")`. CUDA is not available on
 macOS, and these setup instructions do not establish that a particular GPU,
 driver or precision combination has been validated.
+
+## Move to your own model
+
+Continue with the [CSV own-bank exercise](own-bank.qmd), then use the
+[data contract](data.qmd), [model choice](model-choice.qmd) and
+[troubleshooting guide](troubleshooting.qmd) for your ABM. The package guides
+engineering choices and common diagnostics; your scientific target determines
+acceptable error, valid inputs and whether simulator variability matters.

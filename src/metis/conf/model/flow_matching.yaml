@@ -1,4 +1,6 @@
 _target_: metis.Surrogate
+_convert_: all
+observed_outputs: []
 model: flow_matching
 model_options:
   n_blocks: 2

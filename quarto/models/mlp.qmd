@@ -6,7 +6,7 @@ The MLP (MultiLayer Perceptron) or *feedforward neural network* is Metis's most 
 
 ## When this might be a good fit
 
-The MLP is a good starting point for datasets with only static inputs. It is very fast to train and generate predictions from. It will likely not outperform the other architectures (when properly tuned), and unlike the Normalising Flow or Flow Matching architectures, the MLP is a deterministc surrogate.
+The MLP is a good starting point for datasets with only static inputs. It is very fast to train and generate predictions from. Its relative accuracy depends on the bank and tuning. Unlike normalising flow or flow matching, it produces a deterministic trajectory.
 
 
 <!-- TODO: the kinds of problems an MLP surrogate suits. -->
@@ -14,7 +14,7 @@ The MLP is a good starting point for datasets with only static inputs. It is ver
 ## How does an MLP work?
 
 ### Architectural walkthrough
-An MLP's computation is a series of matrix multiplications composed with non-linear activations. Metis's implementation also includes *residual* connections which stablise the training of deeper networks.
+An MLP's computation is a series of matrix multiplications composed with non-linear activations. Metis's implementation also includes *residual* connections which stabilise the training of deeper networks.
 
 In order to get a better sense of how these components work lets trace through the network's forward computation:
 
@@ -55,41 +55,16 @@ $$
 
 ## Configuring an MLP
 
-The MLP's architecture is configured via:
+The installed preset is `model=mlp`: width `hidden_dim=64`, `num_blocks=2`
+residual blocks and `num_layers_per_block=2`. Larger widths increase capacity
+and memory; more blocks/layers deepen the mapping. The input size and flattened
+`T × C` output size come from the dataset.
 
-* `input_dim`: The number of static inputs.
-* `output_dim`: The flattened dimensionality of the sequence. (e.g. 5 timesteps where each step has 3 values would have a flat dim of 15)
-* `num_blocks`:  The number of residual blocks in the network (i.e. network depth)
-* `hidden_dim`: The width of the network (all the matrices inside residual blocks will be $\mathrm{hidden\_dim}\times \mathrm{hidden\_dim}$)
-* `num_layers_per_block`: The number of layers within a residual block (also controls depth)
-
-The first two options are automatically configured for the dataset that you train on.
-
-
-Within Metis we already provide MLP size presets:
-
-| Config | `hidden_dim` | `num_blocks` | `num_layers_per_block` |
-|---|---:|---:|---:|
-| `mlp_small` | 128 | 5 | 2 |
-| `mlp_default` | 256 | 10 | 2 |
-| `mlp_large` | 512 | 20 | 3 |
-
-
-To create a new MLP configuration in `configs/model`:
-
-
-```yaml
-defaults:
-  - mlp_default
-  - _self_
-
-num_blocks: ...
-hidden_dim: ...
-num_layers_per_block: ...
-
+```bash
+uv run metis train model=mlp model.model_options.hidden_dim=128 model.model_options.num_blocks=4
 ```
 
-<!-- TODO: walk through the available size configs and what each architecture
-parameter means, for someone writing their own config. -->
-
-
+The Python equivalent is `Surrogate("mlp", model_options={"hidden_dim": 128,
+"num_blocks": 4})`. Start with the small preset and compare validation error
+before increasing capacity. The historical small/default/large names are mapped
+in [migration](../package/migration.qmd).

@@ -1,95 +1,45 @@
 ---
-title: "Training in METIS"
-execute:
-  eval: false
+title: "Training and monitoring a surrogate"
 ---
 
-The entrypoint to a training job in Metis is `train.py`. Rather than importing training code or writing a script, in Metis we simply run `train.py` in the terminal or a notebook with the appropriate config files supplied. Given the [data and config file we prepared earlier](preparing-data.qmd), getting started with training is a matter of overriding the default data config.
+Complete the [quickstart](../package/quickstart.qmd) first. Both Python and
+Hydra use `Surrogate.fit`, the same model presets and the same artifact formats.
 
-:::{.callout-tip}
-First complete the [advanced source setup](installing_metis.qmd), including CUDA
-PyTorch. Run the commands from the repository root in a terminal or download
-this page as a notebook and use the checkout's `.venv` Python. Keep
-`--locked --all-extras` on the commands so uv retains the historical dependencies.
-In a terminal, omit the notebook-only `%%bash` lines.
-:::
-
-
-## Overriding the default training config
-
-
-First we ensure the repository root is our current directory since this is where `train.py` is located.
-```{python}
-import os
-from IPython.display import Image
-
-if os.path.basename(os.getcwd()) == "examples":
-    os.chdir("..")
-print("cwd:", os.getcwd())
-```
-Now we'll override the default training config to use our `sirds` dataset and in order to check that our model fit the data well we will generate some samples via the sampling arguments:
-
-* `sampling.generate_samples=True` indicates we'd like the surrogate to generate samples once we're done training
-* `sampling.samples_name` specifies where we would like the samples saved
-* `sample.subsample` used to generate samples for only a subset of the validation set
-
-Now go ahead and run this:
-```{python}
-%%bash
-uv run --locked --all-extras python train.py \
-  --config-name default \
-  dataset=sirds \
-  sampling.generate_samples=True \
-  sampling.samples_name=examples/mlp_plot.png \
-  sampling.subsample=5
+```bash
+uv run metis train model=mlp training.steps=1000 plot.enabled=true
+uv run metis train model=transformer training.steps=1000
+uv run metis train model=flow_matching training.steps=1000 evaluation.n_samples=100
 ```
 
-If you're in a notebook run this cell to see the model's plots, otherwise navigate to `examples/mlp_plot.png` and take a look there.
-The orange lines are realisations from the SIRDS simulator for a particular parameter group and the blue line is the prediction from our MLP surrogate.
-```{python}
-Image(filename="examples/mlp_plot.png")
+The optional figure requires the `[plots]` extra. Add it with `uv add` as shown
+in the quickstart. The output directory contains `config.yaml`, `history.json`,
+`model.pt` and `metrics.json`, plus `evaluation.png` when requested. These runs
+use the bundled example; set `dataset=parquet` and its schema for your own bank.
+
+## What a training step means
+
+A step is one AdamW update using a sampled minibatch. It is not an epoch.
+`training.learning_rate`, `training.batch_size` and `training.steps` control the
+basic budget. The default is float32 CPU training at a constant learning rate.
+Validation chooses the best evaluated weights, and `training.patience` can stop
+when validation stops improving. Changing the model changes its objective;
+compare [original-unit validation metrics](../package/model-choice.qmd), not
+raw losses across families.
+
+## Schedules and numerical execution
+
+```bash
+uv run metis train training.schedule=warmup_cosine training.warmup_fraction=0.2 training.min_learning_rate=0.000001
+uv run metis train training.device=cuda training.precision=bf16
 ```
 
-## Training a transformer
-Next we'll try a transformer. All we need to do is override the model config. Be aware that this may take a bit longer to train:
+The warm-up/cosine schedule rises to `training.learning_rate`, then decays toward
+`training.min_learning_rate` over the declared total step budget. Precision
+choices are `fp32`, `tf32` and `bf16`; TF32 needs CUDA. Device and precision
+availability depend on hardware. `training.compile_model=true` is optional;
+`training.deterministic=true` cannot be combined with compilation.
 
-
-```{python}
-%%bash
-uv run --locked --all-extras python train.py \
-  --config-name default \
-  dataset=sirds \
-  sampling.generate_samples=True \
-  sampling.samples_name=examples/transformer_plot.png \
-  sampling.subsample=5 \
-  model=transformer_default
-```
-
-As before we can view the model's predictions:
-
-```{python}
-Image(filename="examples/transformer_plot.png")
-```
-
-## Training a flow matching model
-Again all we need to do is swap out the model config. Since this model is stochastic we generate multiple samples per parameter group. Solid blue is the mean and light blue are individual samples.
-
-```{python}
-%%bash
-uv run --locked --all-extras python train.py \
-  --config-name default \
-  dataset=sirds \
-  sampling.generate_samples=True \
-  sampling.samples_name=examples/flow_matching_plot.png \
-  sampling.subsample=5 \
-  model=flow_matching_default
-```
-
-
-```{python}
-Image(filename="examples/flow_matching_plot.png")
-```
-
-:::{.callout-tip}
-Before moving on try changing some other training settings in the default config. You could change how long you train with `max_steps`, change the learning rate with `peak_lr` and `lr_warmup_frac`, change `batch_size` or try a differently sized model.
-:::
+See [distributed execution](../utils/distributed-training.qmd) for multiple
+devices and [checkpoints](saving-and-loading.qmd) for interrupted jobs.
+W&B is optional and receives live progress through the same callback used by
+Python; see the [tracking guide](../package/hydra.qmd#live-tracking).

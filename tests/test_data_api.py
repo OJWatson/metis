@@ -263,52 +263,34 @@ def test_standardizer_supports_trajectory_samples_with_leading_batch_axes():
         fitted.transform(np.zeros((3, 5, 2, 3)))
 
 
-def test_legacy_loader_validates_boundaries_and_constants():
-    from dataloader import make_tensors
-
-    frame = bank(2, 1).with_columns(
-        pl.col("scenario").str.slice(1).cast(pl.Int64).alias("param_index")
+def test_selected_outputs_preserve_other_channel_scaling_and_splits():
+    frame = bank(6, 2)
+    full = load(frame)
+    selected = SimulationDataset.from_frame(
+        frame, inputs=["beta", "fixed"], outputs=["incidence"], groups=["scenario"]
     )
-    x, y, _, _ = make_tensors(frame, ["beta", "fixed"], ["incidence", "zero"], 3)
-    assert np.isfinite(x.numpy()).all() and np.isfinite(y.numpy()).all()
-    np.testing.assert_array_equal(x[:, 1], 0)
-    np.testing.assert_array_equal(y[:, 1], 0)
-    broken = frame.filter(~((pl.col("param_index") == 0) & (pl.col("t") == 7)))
-    extra = frame.filter(
-        (pl.col("param_index") == 1) & (pl.col("t") == 7)
-    ).with_columns(pl.lit(9).alias("t"))
-    with pytest.raises(ValueError, match="unequal trajectory lengths"):
-        make_tensors(
-            pl.concat([broken, extra], how="vertical_relaxed"),
-            ["beta", "fixed"],
-            ["incidence", "zero"],
-            3,
-        )
+    full_split, selected_split = full.split(), selected.split()
+    assert full_split.train.group_keys == selected_split.train.group_keys
+    assert full_split.validation.group_keys == selected_split.validation.group_keys
+    np.testing.assert_array_equal(full.outputs[..., :1], selected.outputs)
+    a = Standardizer.fit(full_split.train.outputs)
+    b = Standardizer.fit(selected_split.train.outputs)
+    np.testing.assert_array_equal(a.mean[..., :1], b.mean)
+    np.testing.assert_array_equal(a.scale[..., :1], b.scale)
 
 
-def test_legacy_splitting_fits_training_only_and_handles_two_groups(tmp_path):
-    import torch
-    from dataloader import prepare_splits
-
-    frame = bank(2, 1)
-    path = tmp_path / "bank.parquet"
-    frame.write_parquet(path)
-    train, validation, input_stats, output_stats = prepare_splits(
-        path,
-        0.01,
-        42,
-        ["scenario"],
-        ["beta", "fixed"],
-        ["incidence", "zero"],
-        3,
-        None,
-        None,
+def test_standardizer_legacy_arithmetic_roundtrip_and_native_compatibility():
+    stats = Standardizer(
+        [2], [np.float32(np.sqrt(2))], [False], arithmetic_dtype="float32"
     )
-    assert len(train) == len(validation) == 3
-    assert input_stats.means[0, 0] == pytest.approx(train["beta"][0])
-    np.testing.assert_allclose(
-        output_stats.means[0], train.sort("t")["incidence"].to_numpy()
+    restored = Standardizer.from_dict(json.loads(json.dumps(stats.to_dict())))
+    assert restored.arithmetic_dtype == "float32"
+    values = np.array([[1.1], [3.2]], dtype=np.float32)
+    np.testing.assert_array_equal(
+        restored.transform(values), (values - np.float32(2)) / np.float32(np.sqrt(2))
     )
-    assert torch.equal(input_stats.stds, torch.ones_like(input_stats.stds))
-    assert torch.equal(output_stats.stds, torch.ones_like(output_stats.stds))
-    assert input_stats.means[0, 0] != pytest.approx(frame["beta"].mean())
+    original_v1 = stats.to_dict()
+    del original_v1["arithmetic_dtype"]
+    assert Standardizer.from_dict(original_v1).arithmetic_dtype == "float64"
+    with pytest.raises(ValueError, match="arithmetic_dtype"):
+        Standardizer([0], [1], [False], arithmetic_dtype="float16")

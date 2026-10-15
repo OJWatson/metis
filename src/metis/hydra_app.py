@@ -7,6 +7,7 @@ second data loader, training loop, or model artifact format.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import logging
 from pathlib import Path
@@ -118,6 +119,17 @@ def run(config: DictConfig, *, output_dir: str | Path | None = None) -> dict:
         output_dir = HydraConfig.get().runtime.output_dir
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    # Resume refers to the launch directory even with hydra.job.chdir=true.
+    # Relative checkpoint destinations belong to this job's output directory.
+    training = replace(
+        training,
+        resume_from=to_absolute_path(training.resume_from)
+        if training.resume_from
+        else None,
+        checkpoint_dir=str(output_dir / training.checkpoint_dir)
+        if training.checkpoint_dir
+        else None,
+    )
     OmegaConf.save(config, output_dir / "config.yaml", resolve=True)
     with _wandb(config, output_dir=output_dir) as tracking:
         log.info(

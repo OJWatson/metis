@@ -71,3 +71,39 @@ the split fails rather than producing empty training data.
 The current loader materializes the bank in RAM. Training transfers minibatches
 to the device, so the complete bank need not fit on the GPU. Very large banks
 still require an out-of-core extension.
+
+## Inspect without training
+
+```bash
+uv run metis inspect-data bank.parquet --inputs contact_rate recovery_rate --outputs incidence prevalence
+```
+
+This validates the requested schema and reports the available bank. It does not
+fit a network or decide whether the simulation design answers your scientific
+question. For CSV, use the [own-bank exercise](own-bank.qmd) to read a Polars
+frame and save Parquet. Keep units and group meanings in your project metadata.
+
+## Explicit preprocessing
+
+The core loader does not truncate or reinterpret your data automatically. If
+your scientific design requires starting later or using the first retained
+output as an initial-condition input, opt in explicitly:
+
+```python
+from metis.preprocessing import truncate_simulations, initialize_static_inputs
+
+bank = truncate_simulations(bank, start_time=10)
+bank = initialize_static_inputs(bank, mapping={"initial_incidence": "incidence"})
+split = bank.split(seed=42)
+```
+
+Truncation keeps observed times at or after the boundary without interpolating
+or resetting the time coordinate. Initialization copies each realization's first
+retained output into the named static input. Both preserve scenario/replicate
+identities, so replicate-specific initial values do not split the original
+scenario across partitions. Record the boundary and mapping as methodological
+choices; they change the data and its fingerprint.
+
+For known varying inputs, keep them as output-schema channels and select them
+with `Surrogate(..., observed_outputs=[...])`. See [conditioning](conditioning.qmd)
+for which channels are scored and what information each model may use.

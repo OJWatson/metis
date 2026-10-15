@@ -21,9 +21,10 @@ the model object; the package does not force a web framework or plotting system.
 
 A training grid is part of the artifact: changing its horizon or timepoints
 requires a compatible new model. Input-range warnings indicate extrapolation;
-they do not certify predictions inside the ranges. The high-level interface
-currently accepts static inputs. Sequence conditioning is an advanced module
-feature rather than an inferred meaning of a changing input column.
+they do not certify predictions inside the ranges. Conditioned transformer and
+flow-matching artifacts also require `conditioning=` in original units, in their
+saved `observed_outputs` order; see [conditioning](conditioning.qmd). Static
+input columns remain constant within a run.
 
 ## Approximate likelihoods
 

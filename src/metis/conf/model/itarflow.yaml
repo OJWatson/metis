@@ -1,4 +1,6 @@
 _target_: metis.Surrogate
+_convert_: all
+observed_outputs: []
 model: itarflow
 model_options:
   channels: 64

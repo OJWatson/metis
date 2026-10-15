@@ -24,14 +24,17 @@ website:
       - section: "Use the package"
         contents:
           - package/quickstart.qmd
+          - package/own-bank.qmd
           - package/data.qmd
+          - package/conditioning.qmd
           - package/hydra.qmd
           - package/model-choice.qmd
           - package/evaluation.qmd
           - package/deployment.qmd
           - package/troubleshooting.qmd
           - package/api.qmd
-      - section: "Advanced source workflows and background"
+          - package/migration.qmd
+      - section: "Training and scientific background"
         contents:
           - basics/motivation.qmd
           - basics/sirds-example.qmd

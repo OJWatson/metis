@@ -6,7 +6,7 @@ The flow matching transformer model is a flexible and stochastic surrogate.
 
 ## When this might be a good fit
 
-The flow matching surrogate is a good option when stochasticity is needed. Architecturally, it is implemented as a modified transformer and also supports static and sequence conditioning. 
+The flow matching surrogate is a good option when stochasticity is needed. Architecturally, it is implemented as a modified transformer and also supports static and sequence conditioning.
 
 ## How flow matching works
 
@@ -49,30 +49,26 @@ The mathematical details of these models and the derivation of their training ob
 
 ## Configuring a Flow Matching model
 
-Metis's implementation is designed to support different kinds of *Stochastic Interpolant* algorithms (the general name for diffusion and flow matching), although currently only Flow Matching has been set up and tested. The top-level config controls details like the type of algorithm and solver steps for evaluation and contains an inner architectural config that is very similar to the transformer:
+The installed preset is `model=flow_matching`: `n_blocks=2`, `n_head=4`,
+`n_kv_head=4`, `embd_dim=64`, `cond_dropout_prob=0`, `interpolant=linear`.
+Architecture options are flat under `model.model_options`; there is no nested
+`sit` configuration. Blocks control depth, embedding width controls capacity,
+and head counts control the attention decomposition.
 
-* `interpolant`: Currently only 'flow-matching' supported.
-* `num_steps`: Number of ODE solver steps for evaluations, does not impact training.
-* `solver`: ODE solver, currently only 'heun' (second-order) and 'euler' (first-order) are supported.
-* `multi_mode`: Whether to generate multiple samples from the median of the parameter group ('median' option) or to generate multiple samples for each entry in the parameter group ('entire_param_group'). This second option only makes sense for models like HRP and Magenta where realisations within the same parameter group can have different static inputs.
-* `sit`:
-    * `sequence_len`: Number of timesteps in the data sequence.
-    * `data_dim`: Number of variables per datapoint.
-    * `cond_dim`: Number of static input variables.
-    * `n_blocks`: Number of transfomer blocks.
-    * `n_head`: Number of query heads in attention layers.
-    * `n_kv_head`: Number of key-value heads in attention layers.
-    * `qkv_bias`: Whether the projection matrices in the self-attention module use biases.
-    * `embd_dim`: Hidden dimension of the network
-    * `cond_dropout_prob`: Currently unused - but could be used to enable [classifier-free guidance](https://arxiv.org/abs/2207.12598)
-    * `in_and_out_biases`: Whether the input and out projections use learnable biases.
-    * `cross_attn`: The cross attention config for sequence conditioning, can be `None`.
+```bash
+uv run metis train model=flow_matching model.model_options.embd_dim=128 evaluation.num_steps=100
+```
 
-The `sequence_len`, `data_dim` and `cond_dim` are all automatically configured based on the dataset config.
+`interpolant=linear` uses linear noise-to-data paths; `trig` selects the
+trigonometric interpolant. Both change the training objective/path and should be
+recorded with results. `num_steps` and `solver` are sampling options, separate
+from training: `model.sample(inputs, n_samples=100, num_steps=50, solver="heun")`.
+Euler and Heun are supported. More integration steps cost time and do not by
+themselves establish predictive calibration.
 
-
-| Config | `n_blocks` | `n_head` | `n_kv_head` | `embd_dim` 
-|---|---:|---:|---:|---:|
-| `flow_matching_small` | 6 | 4 | 4 | 64 |
-| `flow_matching_default` | 12 | 8 | 8 | 64 |
-| `flow_matching_large` | 16 | 16 | 16 | 128 |
+Dimensions come from the dataset. `qkv_bias` and `in_and_out_biases` are optional
+architecture fields. For observed channels use
+`model.observed_outputs=[intervention]`; the full supplied path is available to
+the network. This is conditional generation, not a causal forecast. See
+[conditioning](../package/conditioning.qmd). Classifier-free guidance is not a
+public sampling feature; do not interpret conditioning dropout as such a guarantee.

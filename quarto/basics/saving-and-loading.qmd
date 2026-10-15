@@ -1,26 +1,49 @@
-# Saving and Loading models
+---
+title: "Save predictions and resume interrupted training"
+---
 
-Once trained, we'd like to deploy our models in some downstream applications. We may also want to resume a training run that was interrupted (e.g. due to a hardware issue) or simply continue training if model performance was still improving. 
+METIS has two deliberately different artifacts. An **inference artifact** is
+for prediction in another process. A **training checkpoint** additionally
+records the optimizer and random state needed to resume an interrupted job.
 
-## Checkpointing
-Both of these use cases are addressed via Metis's 'checkpointing' system. The checkpointer saves the model weights, current training step, the optimiser and resolved configuration (amongst other things) so that training can be resumed. Deterministic runs derive random seeds from the step; reproducible continuation requires the same seed, world size, batch size and learning-rate schedule.
-
-To enable checkpointing in your run simply set how often you'd like a checkpoint saved (number of steps)
-```yaml
-checkpointer:
-  save_every: 1000
-```
-And to continue training from an existing checkpoint we set `resume_from`,
-
-```yaml
-checkpointer:
-  resume_from: outputs/example_run/checkpoint
-```
-
-## Loading just the model weights
-In order to load just the model weights in a script we first instantiate the model and then load the weights into the model via
+## Portable inference
 
 ```python
-ckpt = torch.load(path_to_checkpoint.ckpt, map_location='cpu', weights_only=False)
-model.load_state_dict(ckpt['model'])
+from metis import Surrogate
+model.save("surrogate.pt")
+restored = Surrogate.load("surrogate.pt", device="cpu")
+predictions = restored.predict({"contact_rate": 0.4, "recovery_rate": 0.1})
 ```
+
+Input names in this example must match your fitted schema. The artifact includes
+weights, architecture, scalers, time grid and provenance. It needs no simulation
+bank at prediction time. Calling `fit` starts a fitting operation; use the
+explicit resume option below to continue an interrupted one.
+
+## Training checkpoints
+
+```bash
+uv run metis train training.steps=10000 training.checkpoint_every=500 training.checkpoint_dir=/absolute/path/checkpoints/run-a
+```
+
+Replace `/absolute/path` with a real location. A relative Hydra checkpoint
+directory lives under that job's output directory; a relative `resume_from` path
+is resolved from the launch directory. Absolute paths remove this ambiguity.
+The directory receives `last.pt` at the requested cadence and at completion,
+and `best.pt` when validation selects better weights. To resume an interrupted
+run, repeat the original data/model/training settings and add the checkpoint:
+
+```bash
+uv run metis train training.steps=10000 training.checkpoint_every=500 training.checkpoint_dir=/absolute/path/checkpoints/run-a training.resume_from=/absolute/path/checkpoints/run-a/last.pt
+```
+
+`steps` is the **original total**, not a count of additional steps. Resume
+requires the original model, bank identities, schemas, scalers, optimizer,
+schedule, seed, precision and device topology. Only checkpoint location,
+cadence and resume path may change. METIS rejects incompatible continuation
+rather than silently interpreting a checkpoint under a different experiment.
+
+The same fields are available in `TrainingConfig` for Python. Training
+checkpoints are not accepted by `Surrogate.load`; keep the inference artifact
+saved after fitting for deployment. Pre-package raw checkpoints lack essential
+preprocessing metadata: see [migration](../package/migration.qmd).

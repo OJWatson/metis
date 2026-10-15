@@ -1,0 +1,103 @@
+---
+title: "Migrate existing METIS work"
+---
+
+The original four model families, mathematical explanations and scientific
+scope remain the foundation. Current Python, Hydra, distributed execution,
+conditioning and resume use the installed `metis` package. Root-level training,
+data-loading and model compatibility modules are no longer the active interface.
+
+## Map configurations deliberately
+
+| Earlier source workflow | Installed workflow |
+|---|---|
+| Root training script and `configs/train` | `uv run metis train` or `Surrogate.fit` |
+| `model=mlp_default` | `model=mlp`; set architecture options explicitly when reproducing an old experiment |
+| `model.hidden_dim` | `model.model_options.hidden_dim` |
+| `model.sit.embd_dim` | `model.model_options.embd_dim` for `model=flow_matching` |
+| `dataset.surrogate_input_variables` | `dataset.inputs` |
+| `dataset.output_variables` | `dataset.outputs` |
+| `dataset.grouping_variables` | `dataset.groups` |
+| Hand-entered `num_timesteps` | Inferred and validated from the bank's complete time grid |
+| `max_steps`, `peak_lr`, `lr_warmup_frac` | `training.steps`, `training.learning_rate`, `training.warmup_fraction` |
+| Original warm-up/cosine schedule | Select `training.schedule=warmup_cosine`; package default is constant |
+| `precision`, `deterministic`, `num_gpus` | `training.precision`, `training.deterministic`, `training.num_devices` |
+| `logger.use_wandb` | `wandb.enabled` |
+| `checkpointer.save_every`, `resume_from` | `training.checkpoint_every`, `training.resume_from`, plus `training.checkpoint_dir` |
+| Observed-output configuration | `model.observed_outputs=[name]`; see sequence conditioning |
+| Plot-only sample generation | `predict` / `sample` return original-unit arrays; evaluation plotting is optional |
+
+Installed presets are deliberately small enough for a first CPU run. They are
+not numerically equivalent to the old small/default/large presets. Set the
+architecture, optimizer betas, schedule, precision and split explicitly when
+comparing methods. Data validation and train-only scaling also change behavior.
+Explicit preprocessing now uses `metis.preprocessing.truncate_simulations` and
+`initialize_static_inputs`; these preserve group identity and do not silently
+rebase time. See [data preparation](data.qmd).
+The corrected final Heun integration step changes generated samples, while its
+flow-matching fitting objective is unchanged.
+
+## Preserve the meaning of old checkpoints
+
+An upstream raw checkpoint did not store its normalization statistics. Upstream
+computed statistics on the full bank, whereas the current implementation uses
+training data only. Applying current preprocessing to old weights can therefore
+change predictions even if the original bank and parameters are unchanged.
+Preserving the bank alone is insufficient: preserve the exact old code,
+configuration, split and preprocessing as well.
+
+Current inference artifacts and resumable training checkpoints have explicit
+formats. They reject historical raw checkpoints; do not rename a file to bypass
+a format check. A legacy-to-current conversion needs an explicitly reviewed
+reconstruction of the original scaling and parity checks on predictions.
+A strict importer is available for supported static, float32 models; it does not
+guess missing statistics, silently select a historical normalization policy, or
+resume the old optimizer.
+
+### Explicit historical import
+
+```python
+from metis.migration import LegacyPreprocessing, import_legacy_checkpoint
+
+preprocessing = LegacyPreprocessing.from_dataset(
+    exact_full_normalization_bank,
+    policy="upstream-full-bank",
+    training_data=exact_training_cohort,
+    provenance="Original source revision, data version, split and preprocessing record",
+)
+model = import_legacy_checkpoint(
+    "old-checkpoint.pt", preprocessing=preprocessing,
+    output_path="imported-inference.pt",
+)
+```
+
+For the corrected compatibility workflow, select `policy="corrected-training-only"`
+and pass the exact training cohort as the first argument instead. If you have
+saved means/standard deviations, `LegacyPreprocessing.from_statistics(...)`
+accepts them with ordered names, times, known training bounds and provenance.
+Its default historical layout is channel/time; `layout="time_channel"` accepts
+time/channel output statistics. Historical arithmetic uses float32 and sample
+standard deviation, unlike new-fit population statistics. Exact values matter.
+
+The importer accepts only allowlisted architectures with resolved plain
+configuration and matching float32 tensor weights. It rejects sequence-conditioned
+checkpoints, unsupported/ambiguous architecture settings, unsafe pickled objects,
+invalid scales and schema mismatches. There is no unsafe deserialization fallback.
+It preserves the original file and records its hash and preprocessing policy in
+the new inference artifact. Compare predictions with the trusted original
+environment before scientific use; sampling solver corrections can still change
+flow-matching output even with the same weights. No old training history, best
+step or optimizer state is invented.
+
+For archival reproduction, consult the immutable
+[original upstream revision](https://github.com/mrc-ide/metis/tree/c6361c1da68b576c6f24ed2da2387f2792f3a2a8)
+or the [last compatibility snapshot](https://github.com/OJWatson/metis/tree/739d57cdaa5f74b9a0973c527f063eaa3a72ab06).
+These are historical references, not current installation instructions.
+
+## Two current artifact types
+
+`Surrogate.save` produces an inference bundle for prediction without the bank.
+Training checkpoints preserve optimizer/random state for continuation of the
+same interrupted experiment. `steps` remains the original total when resuming;
+changing the model, data or learning schedule is a new experiment. See
+[save and resume](../basics/saving-and-loading.qmd).

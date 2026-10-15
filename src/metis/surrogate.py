@@ -9,7 +9,7 @@ weights are point estimates, not Bayesian parameter posterior samples.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, fields
 import math
 import os
 from pathlib import Path
@@ -22,41 +22,7 @@ import numpy as np
 import torch
 
 from metis.data import DatasetSplit, SimulationDataset, Standardizer
-
-
-@dataclass(frozen=True)
-class TrainingConfig:
-    """Small, CPU-compatible defaults; ``steps`` counts optimizer updates.
-
-    ``patience`` counts validation evaluations without improvement. It requires
-    a validation dataset. Validation never updates normalization statistics.
-    """
-
-    steps: int = 500
-    batch_size: int = 64
-    learning_rate: float = 1e-3
-    weight_decay: float = 0.001
-    seed: int = 42
-    device: str = "cpu"
-    eval_every: int = 50
-    patience: int | None = None
-
-    def __post_init__(self):
-        for name in ("steps", "batch_size", "eval_every"):
-            _positive_int(getattr(self, name), name)
-        if self.patience is not None:
-            _positive_int(self.patience, "patience")
-        _valid_seed(self.seed)
-        if not isinstance(self.device, str):
-            raise ValueError("device must be a string such as 'cpu' or 'cuda:0'")
-        for name in ("learning_rate", "weight_decay"):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(f"{name} must be a finite number")
-            if not math.isfinite(value) or value < 0:
-                raise ValueError(f"{name} must be finite and nonnegative")
-        if self.learning_rate == 0:
-            raise ValueError("learning_rate must be positive")
+from metis.training import TrainingConfig, run_training
 
 
 def _positive_int(value, name):
@@ -116,6 +82,26 @@ def _plain(value):
     raise TypeError(f"Unsupported metadata type: {type(value).__name__}")
 
 
+def _validate_weights(model, state):
+    """Reject silent dtype casts and nonfinite values when loading a bundle."""
+    if not isinstance(state, Mapping):
+        raise ValueError("Artifact weights must be named tensors")
+    expected = model.state_dict()
+    if set(state) != set(expected):
+        raise ValueError("Artifact weights do not match its model architecture (missing or extra keys)")
+    for name, reference in expected.items():
+        value = state[name]
+        if (
+            not isinstance(value, torch.Tensor)
+            or value.dtype != reference.dtype
+            or value.shape != reference.shape
+            or not bool(torch.isfinite(value).all())
+        ):
+            raise ValueError(
+                f"Artifact weight {name!r} must have finite values, shape {tuple(reference.shape)} and dtype {reference.dtype}"
+            )
+
+
 def _environment_versions():
     from metis import __version__
 
@@ -131,20 +117,42 @@ class Surrogate:
     """A static-input surrogate for a bank of fixed-length simulations.
 
     ``model_options`` contains flat architecture options for the selected model.
-    Dimensions come from the training dataset and cannot be overridden. Sequence
-    conditioning remains available through the advanced ``metis.models`` API.
+    Dimensions come from the training dataset and cannot be overridden.
+    ``observed_outputs`` selects channels supplied at prediction time rather
+    than predicted. Transformer conditioning uses history before each time;
+    flow matching uses the full observed trajectory (not a causal forecast).
     """
 
     FAMILIES = ("mlp", "transformer", "flow_matching", "itarflow")
-    ARTIFACT_VERSION = 1
+    ARTIFACT_VERSION = 2
 
-    def __init__(self, model: str = "mlp", model_options: Mapping | None = None):
+    def __init__(
+        self,
+        model: str = "mlp",
+        model_options: Mapping | None = None,
+        *,
+        observed_outputs: list[str] | tuple[str, ...] | None = None,
+    ):
         if model not in self.FAMILIES:
             raise ValueError(f"Unknown model {model!r}; choose one of {self.FAMILIES}")
         if model_options is not None and not isinstance(model_options, Mapping):
             raise ValueError(
                 "model_options must be a dictionary of architecture options"
             )
+        if observed_outputs is not None and (
+            not isinstance(observed_outputs, (list, tuple))
+            or any(not isinstance(n, str) or not n for n in observed_outputs)
+            or len(set(observed_outputs)) != len(observed_outputs)
+        ):
+            raise ValueError(
+                "observed_outputs must contain distinct output column names"
+            )
+        self.observed_outputs = tuple(observed_outputs or ())
+        if self.observed_outputs and model not in ("transformer", "flow_matching"):
+            raise ValueError(
+                "Observed sequence conditioning requires transformer or flow_matching"
+            )
+        self.conditioning_scaler = None
         self.model_name = model
         self.model_options = _plain(dict(model_options or {}))
         self._validate_options()
@@ -211,7 +219,7 @@ class Surrogate:
         }
         if advanced.intersection(self.model_options):
             raise ValueError(
-                "Surrogate supports static inputs only. For observed sequence conditioning, use the advanced metis.models API."
+                "Use observed_outputs=[names] for sequence conditioning; do not set low-level conditioning options in model_options."
             )
         if inferred.intersection(self.model_options):
             raise ValueError(
@@ -241,6 +249,8 @@ class Surrogate:
         )
         from metis.models.itarflow import ImprovedTARFlow, iTarFlowConfig
 
+        from metis.models.utils.cross_attention import CrossAttentionConfig
+
         p, t, c = len(self.input_names), len(self.times), len(self.output_names)
         options = dict(self.model_options)
         conf: dict[str, Any]
@@ -263,8 +273,21 @@ class Surrogate:
                 raise ValueError(
                     "window_pattern must be a nonempty string containing only L and S"
                 )
+            cross = (
+                CrossAttentionConfig(
+                    n_head=conf["n_head"],
+                    n_kv_head=conf["n_kv_head"],
+                    cond_dim=len(self.observed_outputs),
+                )
+                if self.observed_outputs
+                else None
+            )
             architecture = TransformerConfig(
-                sequence_len=t + 1, x_input_dim=c, static_input_dim=p, **conf
+                sequence_len=t + 1,
+                x_input_dim=c,
+                static_input_dim=p,
+                cross_attn=cross,
+                **conf,
             )
             model = Transformer(architecture)
             model.init_weights()
@@ -283,7 +306,18 @@ class Surrogate:
             interpolant = (
                 TrigonometricInterpolant() if name == "trig" else LinearInterpolant()
             )
-            architecture = SiTConfig(sequence_len=t, data_dim=c, cond_dim=p, **conf)
+            cross = (
+                CrossAttentionConfig(
+                    n_head=conf["n_head"],
+                    n_kv_head=conf["n_kv_head"],
+                    cond_dim=len(self.observed_outputs),
+                )
+                if self.observed_outputs
+                else None
+            )
+            architecture = SiTConfig(
+                sequence_len=t, data_dim=c, cond_dim=p, cross_attn=cross, **conf
+            )
             model = InterpolantTransformer(architecture, interpolant)
         else:
             conf = dict(
@@ -371,10 +405,33 @@ class Surrogate:
         device = _device(cfg.device)
         self._fitted = False
         self.input_names = tuple(train.input_names)
-        self.output_names = tuple(train.output_names)
+        self.training_output_names = tuple(train.output_names)
+        if set(self.observed_outputs) - set(train.output_names):
+            raise ValueError("observed_outputs must be columns in the training bank")
+        self.output_names = tuple(
+            n for n in train.output_names if n not in self.observed_outputs
+        )
+        if not self.output_names:
+            raise ValueError("At least one output must remain to be predicted")
+        pred_idx = [train.output_names.index(n) for n in self.output_names]
+        obs_idx = [train.output_names.index(n) for n in self.observed_outputs]
         self.times = np.array(train.times, copy=True)
         self.input_scaler = Standardizer.fit(train.inputs, axis=0)
-        self.output_scaler = Standardizer.fit(train.outputs, axis=0)
+        full_scaler = Standardizer.fit(train.outputs, axis=0)
+        self.output_scaler = Standardizer(
+            full_scaler.mean[:, pred_idx],
+            full_scaler.scale[:, pred_idx],
+            full_scaler.constant_mask[:, pred_idx],
+        )
+        self.conditioning_scaler = (
+            Standardizer(
+                full_scaler.mean[:, obs_idx],
+                full_scaler.scale[:, obs_idx],
+                full_scaler.constant_mask[:, obs_idx],
+            )
+            if obs_idx
+            else None
+        )
         self.domain_min = np.min(train.inputs, axis=0).copy()
         self.domain_max = np.max(train.inputs, axis=0).copy()
         self.training_bounds = {"min": self.domain_min, "max": self.domain_max}
@@ -387,9 +444,7 @@ class Surrogate:
             ).copy()
         )
         outputs = torch.from_numpy(
-            np.asarray(
-                self.output_scaler.transform(train.outputs), dtype=np.float32
-            ).copy()
+            np.asarray(full_scaler.transform(train.outputs), dtype=np.float32).copy()
         )
         val_tensors = None
         if validation is not None:
@@ -401,73 +456,49 @@ class Surrogate:
                 ),
                 torch.from_numpy(
                     np.asarray(
-                        self.output_scaler.transform(validation.outputs),
+                        full_scaler.transform(validation.outputs),
                         dtype=np.float32,
                     ).copy()
                 ),
             )
-        best_state, best_loss, best_step, stale = None, float("inf"), None, 0
-        stopped = False
         with torch.random.fork_rng(devices=_rng_devices(device)):
             _seed_rng(cfg.seed, device)
             self.model = self._create_model().to(device)
-            # AdamW without fused/compiled paths also supports ordinary CPUs.
-            decay = [
-                p for p in self.model.parameters() if p.requires_grad and p.ndim >= 2
-            ]
-            no_decay = [
-                p for p in self.model.parameters() if p.requires_grad and p.ndim < 2
-            ]
-            optimizer = torch.optim.AdamW(
-                [
-                    {"params": decay, "weight_decay": cfg.weight_decay},
-                    {"params": no_decay, "weight_decay": 0.0},
-                ],
-                lr=cfg.learning_rate,
+            result = run_training(
+                self.model,
+                inputs,
+                outputs,
+                val_tensors,
+                cfg,
+                metadata=_plain(
+                    {
+                        "model_name": self.model_name,
+                        "model_config": self._resolved_model_config,
+                        "model_options": self._resolved_model_options,
+                        "input_names": self.input_names,
+                        "output_names": self.training_output_names,
+                        "observed_outputs": self.observed_outputs,
+                        "times": self.times,
+                        "input_scaler": self.input_scaler.to_dict(),
+                        "output_scaler": full_scaler.to_dict(),
+                        "training_fingerprint": train.fingerprint,
+                        "validation_fingerprint": validation.fingerprint
+                        if validation is not None
+                        else None,
+                    }
+                ),
+                on_progress=on_progress,
+                pred_and_obs_idx=(pred_idx, obs_idx) if obs_idx else None,
             )
-            generator = torch.Generator(device="cpu").manual_seed(cfg.seed)
-            for step in range(1, cfg.steps + 1):
-                self.model.train()
-                idx = torch.randint(len(inputs), (cfg.batch_size,), generator=generator)
-                x, y = inputs[idx].to(device), outputs[idx].to(device)
-                optimizer.zero_grad(set_to_none=True)
-                loss = self.model.compute_loss(x, y[:, :-1], y)
-                self._finite(loss, f"Training loss at step {step}")
-                loss.backward()
-                for parameter in self.model.parameters():
-                    if parameter.grad is not None:
-                        self._finite(parameter.grad, f"Gradient at step {step}")
-                optimizer.step()
-                record = {"step": step, "train_loss": float(loss.detach())}
-                if val_tensors is not None and (
-                    step % cfg.eval_every == 0 or step == cfg.steps
-                ):
-                    val_loss = self._validation_loss(val_tensors, cfg)
-                    record["validation_loss"] = val_loss
-                    if val_loss < best_loss:
-                        best_loss, best_step, stale = val_loss, step, 0
-                        best_state = {
-                            key: value.detach().cpu().clone()
-                            for key, value in self.model.state_dict().items()
-                        }
-                    else:
-                        stale += 1
-                    if cfg.patience is not None and stale >= cfg.patience:
-                        stopped = True
-                self.history.append(record)
-                if on_progress is not None:
-                    on_progress(dict(record))
-                if stopped:
-                    break
-            if best_state is not None:
-                self.model.load_state_dict(best_state)
-            self.model.eval()
+        self.history = result.history
         self.training_metadata = {
             "config": asdict(cfg),
-            "completed_steps": len(self.history),
-            "best_step": best_step,
-            "best_validation_loss": best_loss if best_step is not None else None,
-            "stopped_early": stopped,
+            "completed_steps": result.completed_steps,
+            "best_step": result.best_step,
+            "best_validation_loss": result.best_loss
+            if result.best_step is not None
+            else None,
+            "stopped_early": result.stopped_early,
             "training_fingerprint": train.fingerprint,
             "validation_fingerprint": validation.fingerprint
             if validation is not None
@@ -484,30 +515,15 @@ class Surrogate:
             ),
             "environment": {
                 **_environment_versions(),
-                "fit_dtype": "float32",
+                "fit_dtype": "bfloat16 autocast"
+                if cfg.precision == "bf16"
+                else "float32",
+                "fit_precision": cfg.precision,
                 "fit_device": str(device),
             },
         }
         self._fitted = True
         return self
-
-    def _validation_loss(self, tensors, cfg):
-        x, y = tensors
-        total = 0.0
-        self.model.eval()
-        # Equal Monte Carlo draws each evaluation improve comparability without
-        # consuming the training stream's random numbers.
-        with torch.random.fork_rng(devices=_rng_devices(self.device)), torch.no_grad():
-            _seed_rng((cfg.seed + 1) % (2**63), self.device)
-            for start in range(0, len(x), cfg.batch_size):
-                xb, yb = (
-                    x[start : start + cfg.batch_size].to(self.device),
-                    y[start : start + cfg.batch_size].to(self.device),
-                )
-                loss = self.model.compute_loss(xb, yb[:, :-1], yb)
-                self._finite(loss, "Validation loss")
-                total += float(loss) * len(xb)
-        return total / len(x)
 
     @staticmethod
     def _finite(value, name):
@@ -598,10 +614,33 @@ class Surrogate:
                 stacklevel=3,
             )
 
+    def _conditioning(self, values, count):
+        if not self.observed_outputs:
+            if values is not None:
+                raise ValueError("This model was trained without observed_outputs")
+            return None
+        if values is None:
+            raise ValueError(
+                f"conditioning is required with channels {list(self.observed_outputs)}"
+            )
+        if isinstance(values, Mapping):
+            if set(values) != set(self.observed_outputs):
+                raise ValueError(
+                    f"conditioning names must be exactly {list(self.observed_outputs)}"
+                )
+            values = np.stack([values[n] for n in self.observed_outputs], axis=-1)
+        array = np.asarray(values, dtype=np.float32)
+        expected = (count, len(self.times), len(self.observed_outputs))
+        if array.shape != expected or not np.isfinite(array).all():
+            raise ValueError(f"conditioning must be finite with shape {expected}")
+        assert self.conditioning_scaler is not None
+        return np.asarray(self.conditioning_scaler.transform(array), dtype=np.float32)
+
     def predict(
         self,
         inputs,
         *,
+        conditioning=None,
         n_samples: int | None = None,
         seed: int = 0,
         num_steps: int = 50,
@@ -620,6 +659,7 @@ class Surrogate:
                 )
             return self.sample(
                 inputs,
+                conditioning=conditioning,
                 n_samples=n_samples,
                 seed=seed,
                 num_steps=num_steps,
@@ -630,6 +670,7 @@ class Surrogate:
                 "n_samples applies only to stochastic models; call predict(inputs) for this deterministic model"
             )
         array = self._inputs(inputs)
+        conditions = self._conditioning(conditioning, len(array))
         values = np.asarray(self.input_scaler.transform(array), dtype=np.float32)
         batches = []
         self.model.eval()
@@ -646,7 +687,16 @@ class Surrogate:
                     output = torch.cat(
                         list(
                             self.model.generate(
-                                x, max_output_steps=len(self.times), use_kv_cache=False
+                                x,
+                                max_output_steps=len(self.times),
+                                use_kv_cache=False,
+                                conditioning_sequence=(
+                                    torch.from_numpy(
+                                        conditions[start : start + len(x)].copy()
+                                    ).to(self.device)
+                                    if conditions is not None
+                                    else None
+                                ),
                             )
                         ),
                         dim=1,
@@ -665,11 +715,14 @@ class Surrogate:
         seed: int = 0,
         num_steps: int = 50,
         solver: str = "heun",
+        *,
+        conditioning=None,
     ) -> np.ndarray:
         """Draw ``(batch, sample, time, output)`` trajectories in original units.
 
         Samples express fitted simulator variability, not uncertainty about
-        network weights. ``seed`` controls an isolated random stream.
+        network weights. ``seed`` controls an isolated random stream. Changing
+        the saved inference batch size can change draws for the same seed.
         """
         self._require_fit()
         if not self.is_stochastic:
@@ -682,6 +735,7 @@ class Surrogate:
         if solver not in ("euler", "heun"):
             raise ValueError("solver must be 'euler' or 'heun'")
         array = self._inputs(inputs)
+        conditions = self._conditioning(conditioning, len(array))
         x_values = np.asarray(self.input_scaler.transform(array), dtype=np.float32)
         generator = torch.Generator(device="cpu").manual_seed(seed)
         count = len(array) * n_samples
@@ -701,7 +755,15 @@ class Surrogate:
                 ).to(self.device)
                 if self.model_name == "flow_matching":
                     output, _ = self.model.sample(
-                        z, x, num_steps=num_steps, method=solver
+                        z,
+                        x,
+                        num_steps=num_steps,
+                        method=solver,
+                        cond_seq=(
+                            torch.from_numpy(conditions[ids].copy()).to(self.device)
+                            if conditions is not None
+                            else None
+                        ),
                     )
                 else:
                     output, _ = self.model.reverse(z, x)
@@ -746,17 +808,23 @@ class Surrogate:
         self._finite(outputs, "Outputs")
         self._warn_domain(inputs.detach().cpu().numpy())
         x, y = (
-            inputs.to(device=self.device, dtype=torch.float64),
-            outputs.to(device=self.device, dtype=torch.float64),
+            inputs.to(
+                device=self.device,
+                dtype=getattr(torch, self.input_scaler.arithmetic_dtype),
+            ),
+            outputs.to(
+                device=self.device,
+                dtype=getattr(torch, self.output_scaler.arithmetic_dtype),
+            ),
         )
         xm = torch.tensor(self.input_scaler.mean, dtype=x.dtype, device=self.device)
         xs = torch.tensor(self.input_scaler.scale, dtype=x.dtype, device=self.device)
         ym = torch.tensor(self.output_scaler.mean, dtype=y.dtype, device=self.device)
         ys = torch.tensor(self.output_scaler.scale, dtype=y.dtype, device=self.device)
         self.model.eval()
-        # Match Standardizer exactly: center/scale with saved float64 statistics,
-        # then cast standardized values for the float32 neural network. Casting
-        # means before centering loses small variations around a large offset.
+        # Match the saved arithmetic policy: new fits center with float64
+        # statistics; verified legacy imports reproduce float32 preprocessing.
+        # Cast standardized values for the float32 neural network only afterwards.
         z, mean_logdet = self.model(
             ((y - ym) / ys).to(torch.float32),
             ((x - xm) / xs).to(torch.float32),
@@ -809,6 +877,13 @@ class Surrogate:
             },
             "input_names": list(self.input_names),
             "output_names": list(self.output_names),
+            "observed_outputs": list(self.observed_outputs),
+            "training_output_names": list(
+                getattr(self, "training_output_names", self.output_names)
+            ),
+            "conditioning_scaler": _plain(self.conditioning_scaler.to_dict())
+            if self.conditioning_scaler is not None
+            else None,
             "times": _plain(self.times),
             "input_scaler": _plain(self.input_scaler.to_dict()),
             "output_scaler": _plain(self.output_scaler.to_dict()),
@@ -841,7 +916,7 @@ class Surrogate:
         bundle = torch.load(path, map_location="cpu", weights_only=True)
         if not isinstance(bundle, dict) or bundle.get("format") != "metis-surrogate":
             raise ValueError("Not a METIS Surrogate artifact")
-        if bundle.get("format_version") != cls.ARTIFACT_VERSION:
+        if bundle.get("format_version") not in (1, cls.ARTIFACT_VERSION):
             raise ValueError(
                 f"Unsupported METIS artifact version {bundle.get('format_version')!r}"
             )
@@ -864,9 +939,24 @@ class Surrogate:
             raise ValueError(
                 f"Incomplete METIS artifact; missing {sorted(required - bundle.keys())}"
             )
-        surrogate = cls(bundle["model_name"], bundle["model_options"])
+        surrogate = cls(
+            bundle["model_name"],
+            bundle["model_options"],
+            observed_outputs=bundle.get("observed_outputs", []),
+        )
         surrogate.input_names = tuple(bundle["input_names"])
         surrogate.output_names = tuple(bundle["output_names"])
+        surrogate.training_output_names = tuple(
+            bundle.get("training_output_names", surrogate.output_names)
+        )
+        if (
+            set(surrogate.training_output_names)
+            != set(surrogate.output_names) | set(surrogate.observed_outputs)
+            or len(set(surrogate.training_output_names))
+            != len(surrogate.training_output_names)
+            or set(surrogate.output_names) & set(surrogate.observed_outputs)
+        ):
+            raise ValueError("Invalid artifact observed/predicted output schema")
         surrogate.times = np.asarray(bundle["times"])
         for name, values in (
             ("input_names", surrogate.input_names),
@@ -898,6 +988,19 @@ class Surrogate:
             raise ValueError(
                 "Artifact normalization dimensions do not match its schema"
             )
+        if surrogate.observed_outputs:
+            if bundle.get("conditioning_scaler") is None:
+                raise ValueError("Artifact is missing conditioning normalization")
+            surrogate.conditioning_scaler = Standardizer.from_dict(
+                bundle["conditioning_scaler"]
+            )
+            if surrogate.conditioning_scaler.mean.shape != (
+                t,
+                len(surrogate.observed_outputs),
+            ):
+                raise ValueError(
+                    "Artifact conditioning normalization dimensions do not match its schema"
+                )
         surrogate.domain_min = np.asarray(bundle["domain_min"], dtype=np.float32)
         surrogate.domain_max = np.asarray(bundle["domain_max"], dtype=np.float32)
         if (
@@ -920,6 +1023,7 @@ class Surrogate:
         surrogate.device = target_device
         with torch.random.fork_rng(devices=_rng_devices(target_device)):
             surrogate.model = surrogate._create_model().to(target_device)
+            _validate_weights(surrogate.model, bundle["weights"])
             surrogate.model.load_state_dict(bundle["weights"], strict=True)
         surrogate.model.eval()
         surrogate._fitted = True

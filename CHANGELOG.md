@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0
+
+- Unify Python and installed Hydra training, including optional warm-up/cosine
+  scheduling, precision, compilation, deterministic settings and multiple devices.
+- Add resumable optimizer/RNG checkpoints with strict data/configuration checks;
+  keep complete inference artifacts separate from training continuation.
+- Expose named observed-sequence conditioning for transformer and flow matching.
+- Add explicit truncation and initial-state preparation preserving group identity.
+- Add strict inference-only historical checkpoint import with explicit original
+  preprocessing, provenance and numerical-parity checks.
+- Remove root training/data/model compatibility interfaces after migration to the
+  installed package, and update scientific tutorials to the current configuration.
+- Add a CSV own-bank exercise, a differentiable-likelihood smoke example and an
+  automated fresh-project handoff using a built wheel.
+- Expand reference, troubleshooting and migration documentation. Scientific
+  fidelity and GPU/driver acceptance remain application/hardware-specific.
+
 ## 0.2.0
 
 - Introduce the installable metis namespace and metis-surrogate distribution.

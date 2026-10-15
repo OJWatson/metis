@@ -169,13 +169,13 @@ def test_best_validation_state_restored_and_patience(bank, monkeypatch):
     surrogate = Surrogate("mlp", OPTIONS["mlp"])
     states = []
 
-    def controlled_validation(tensors, config):
+    def controlled_validation(loss_module, tensors, config, device, rank, world_size):
         states.append(
             {k: v.detach().clone() for k, v in surrogate.model.state_dict().items()}
         )
         return [1.0, 2.0, 3.0][len(states) - 1]
 
-    monkeypatch.setattr(surrogate, "_validation_loss", controlled_validation)
+    monkeypatch.setattr("metis.training._evaluate", controlled_validation)
     surrogate.fit(
         train, val, TrainingConfig(steps=10, batch_size=8, eval_every=1, patience=2)
     )
@@ -380,3 +380,24 @@ def test_artifact_versions_are_recorded_without_restricting_portable_load(
         Surrogate.load(path).predict(train.inputs[:2]),
         surrogate.predict(train.inputs[:2]),
     )
+
+
+@pytest.mark.parametrize("corruption", ["int", "complex", "nan"])
+def test_artifacts_reject_silent_parameter_casts_and_nonfinite_weights(
+    bank, tmp_path, corruption
+):
+    model, _, _ = make_fit(bank, steps=1)
+    path = model.save(tmp_path / "bad.pt")
+    bundle = torch.load(path, weights_only=True)
+    key = next(iter(bundle["weights"]))
+    value = bundle["weights"][key]
+    bundle["weights"][key] = (
+        value.long()
+        if corruption == "int"
+        else value.cfloat() + 1j
+        if corruption == "complex"
+        else torch.full_like(value, float("nan"))
+    )
+    torch.save(bundle, path)
+    with pytest.raises(ValueError, match="Artifact weight"):
+        Surrogate.load(path)
