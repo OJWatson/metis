@@ -35,7 +35,8 @@ Documentation is a Quarto website. Install the Quarto CLI separately, install
 the docs extra, and run:
 
 ~~~bash
-quarto render quarto --to html --no-execute
+quarto render quarto --to all --no-execute
+python scripts/check_site_links.py quarto/_site
 python examples/package_quickstart.py --steps 20 --output /tmp/metis-example
 ~~~
 
