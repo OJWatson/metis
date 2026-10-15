@@ -1,0 +1,72 @@
+---
+title: "Train and reuse your first surrogate"
+---
+
+This example uses a bundled SIRDS simulation bank: 100 parameter groups, five
+replicates and 40 timepoints. It checks the complete workflow on a CPU.
+A short run is not a scientifically validated epidemic surrogate.
+
+## Install
+
+Use Python 3.11 or newer in an isolated environment. The following chooses
+CPU PyTorch. For CUDA, install the PyTorch build appropriate to your hardware.
+
+```bash
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install "metis-surrogate @ git+https://github.com/OJWatson/metis.git"
+metis demo --steps 100 --output metis-demo
+```
+
+This creates `model.pt`, `metrics.json` and `prediction.npy`. `model.pt` includes
+preprocessing and the ordered input/output schema, so it can be moved to a
+machine that does not have the original bank. The package is not yet on PyPI;
+the existing `metis` PyPI project is unrelated.
+
+## Train in Python
+
+```python
+from metis import load_example, Surrogate, TrainingConfig
+
+bank = load_example()
+split = bank.split(validation_fraction=0.2, test_fraction=0.2, seed=42)
+model = Surrogate("mlp").fit(
+    split.train,
+    validation=split.validation,
+    config=TrainingConfig(steps=500, device="cpu"),
+)
+report = model.evaluate(split.test)
+print(report.by_output)
+print(report.worst_groups(5))
+model.save("surrogate.pt")
+report.save("evaluation.json")
+```
+
+A step is an optimizer update, not a full pass through the bank. Validation
+chooses the best evaluated model weights. The test set does not influence
+scaling, optimization or weight selection. Reserve it for assessing a final
+choice; a sweep should use validation for model comparison and assess test
+performance only after the choice is made.
+
+## Reload and predict
+
+```python
+restored = Surrogate.load("surrogate.pt")
+prediction = restored.predict({
+    "I_0": 0.04, "beta": 0.4, "gamma": 0.15, "omega": 0.02, "mu": 0.02
+})
+print(prediction.shape)  # (1, 40, 4), original compartment-count units
+```
+
+A dict names the inputs; arrays must follow `restored.input_names`. The time grid
+and output order are `restored.times` and `restored.output_names`. Extrapolating
+outside the training input ranges emits a warning rather than clipping values.
+
+## Use Hydra instead
+
+```bash
+metis train model=mlp training.steps=500 training.device=cpu
+```
+
+This calls the same `Surrogate.fit` and evaluation methods. Hydra adds
+configuration composition, run directories, overrides and sweeps.
+See [the Hydra workflow](hydra.qmd).

@@ -1,0 +1,42 @@
+defaults:
+  - dataset: example
+  - model: mlp
+  - training: default
+  - _self_
+
+# Fractions refer to parameter/scenario groups, never individual replicates.
+split:
+  validation_fraction: 0.2
+  test_fraction: 0.2
+  seed: 42
+
+evaluation:
+  partition: test
+  n_samples: 32
+  seed: 42
+  num_steps: 50
+  solver: heun
+  constraints: null
+
+plot:
+  enabled: false
+  output: null
+  max_runs: 4
+
+# Optional logging imports wandb only when enabled; metrics stream during fit.
+wandb:
+  enabled: false
+  project: metis
+  entity: null
+  name: null
+  mode: online
+  tags: []
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S-%f}
+  sweep:
+    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S-%f}
+    subdir: ${hydra.job.num}

@@ -12,7 +12,7 @@ website:
         text: Home
     right:
       - icon: github
-        href: https://github.com/  # TODO: repo URL
+        href: https://github.com/OJWatson/metis
         aria-label: GitHub
   sidebar:
     style: docked
@@ -21,7 +21,17 @@ website:
     contents:
       - href: index.qmd
         text: Home
-      - section: "Basics of surrogate modelling with Metis"
+      - section: "Use the package"
+        contents:
+          - package/quickstart.qmd
+          - package/data.qmd
+          - package/hydra.qmd
+          - package/model-choice.qmd
+          - package/evaluation.qmd
+          - package/deployment.qmd
+          - package/troubleshooting.qmd
+          - package/api.qmd
+      - section: "Advanced source workflows and background"
         contents:
           - basics/motivation.qmd
           - basics/sirds-example.qmd

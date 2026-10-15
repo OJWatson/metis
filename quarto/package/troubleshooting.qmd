@@ -1,0 +1,27 @@
+---
+title: "Troubleshooting and model choice"
+---
+
+| Symptom | First checks and actions |
+|---|---|
+| Data validation fails | Check the reported columns and run identities. Confirm complete grids, constant inputs and unique group/rep/time keys. Do not pad or drop observations without a scientific decision. |
+| Too few groups for a split | Reduce requested partitions explicitly or produce more scenarios. Replicates are not substitutes for independent parameter groups. |
+| Non-finite loss | Inspect numeric ranges and model options. Try a smaller learning rate and a small baseline. Constant dimensions are already handled; do not add noise just to hide a failure. |
+| Good training loss, poor validation | Compare parameter coverage and model capacity; tune using validation, and use early stopping with an explicit patience. |
+| Good transformer training loss, poor predictions | Inspect autonomous rollouts. Teacher-forced next-step loss can hide accumulating prediction errors. |
+| Good average, missing stochastic variability | A deterministic model cannot generate a conditional distribution. Compare flow matching or iTARFlow on distributional metrics. |
+| Negative counts or broken conservation | Inspect violation reports. The models do not enforce these rules. A support-aware model or transformation is a separate scientific decision. |
+| CUDA unavailable | Use the CPU package API or install compatible PyTorch/drivers. The legacy source trainer requires CUDA. |
+| Out of memory | Reduce batch size, width, sequence length or sample batch size as appropriate. The bank still needs RAM even though training uses device minibatches. |
+| Reloaded predictions differ | Use the complete artifact, same sampling seed and numerical settings. Old raw checkpoints lack preprocessing. |
+| Inference looks overconfident | Check identifiability, observation assumptions, surrogate fidelity and posterior predictive calibration. More flow samples do not measure surrogate-error uncertainty. |
+
+Start with an MLP and a train-mean baseline. Use a transformer if sequential
+structure is useful; compare whole-rollout error. Use flow matching when
+stochastic trajectories matter. Use iTARFlow when a tractable density is useful
+and the continuous support assumptions are defensible.
+
+Presets are starting configurations, not automatic recommendations. Learning
+rate, data coverage, sample budget and the scientific target can matter more
+than the model family. The original architecture pages give more detail; the
+new package evaluation workflow provides common diagnostics.

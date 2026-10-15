@@ -1,0 +1,10 @@
+# Relative paths are resolved against the directory where the job was launched.
+_target_: metis.SimulationDataset.from_parquet
+path: ???
+inputs: ???
+outputs: ???
+# Omit groups/null to group by identical input tuples; name scenario columns
+# explicitly when replicate-specific initial conditions are also model inputs.
+groups: null
+time: t
+replicate: rep

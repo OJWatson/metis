@@ -1,0 +1,8 @@
+{
+  "source": "mrc-ide/metis examples/sirds_data.parquet",
+  "source_commit": "c6361c1da68b576c6f24ed2da2387f2792f3a2a8",
+  "source_sha256": "c75837ffdc33712badcf1cbb6f1d6b23a85b8ee51d1e2c9c97189f1c204e0140",
+  "selection": "100 parameter groups sampled after sorting, seed 42; t <= 40; all five replicates",
+  "rows": 20000,
+  "purpose": "Fast installation/tutorial example; not a benchmark representative of all ABMs"
+}

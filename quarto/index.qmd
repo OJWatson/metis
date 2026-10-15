@@ -1,40 +1,52 @@
 ---
 title: "METIS"
-subtitle: "Configurable neural network surrogates for stochastic timeseries simulators"
-toc: false
 ---
 
-METIS is a collection of configurable "recipes" for training neural network
-surrogate (emulator) models that stand in for expensive stochastic simulators.
-Instead of running a slow simulator every time you need a sample, you train a
-model once and then generate realisations cheaply.
+METIS turns a bank of simulator runs into a neural surrogate you can train,
+evaluate, save and use in notebooks, fitting scripts or dashboards.
 
-The codebase favours simple, single-file implementations wired together with
-[Hydra](https://hydra.cc) configuration, so that you can swap models, datasets
-and training settings by editing YAML rather than code.
+[Start with a complete example](package/quickstart.qmd){.btn .btn-primary}
+[Configure runs with Hydra](package/hydra.qmd){.btn .btn-secondary}
 
-### Overview of METIS features
-* Implementations of MLPs, Autoregressive Transformers, Flow Matching and Normalising Flows.
-* Support for static parameter conditioning and sequence conditioning.
-* Parquet-based dataloading pipeline.
-* Weights and Biases integration for hyperparameter sweeping and experiment tracking.
-* Visualisation utilities.
+## One library and two useful entry points
 
-## How these docs are organised
+Use Python objects when working interactively or embedding a model in an
+application. Use Hydra to compose experiment configurations, override settings
+and run sweeps. Both call the same training and evaluation functions and save
+the same model artifacts.
 
-- **[Basics of surrogate modelling](basics/motivation.qmd)** — what surrogate
-  modelling is, the SIRDS example simulator, preparing data, a Hydra crash
-  course, and training your first model.
-- **[Different kinds of surrogates](models/overview.qmd)** — the model families
-  on offer (MLP, Transformer, Flow Matching, Normalising Flow), when to reach for each,
-  and how their configs work.
-- **[Utilities and advanced features]()** — training on multiple GPUs and visualising datasets.
-- **[Sweeping](sweeping/overview.qmd)** — tuning hyperparameters with Weights &
-  Biases and the METIS sweep configs.
-- **[SBI](sbi/overview.qmd)** — using a trained surrogate for simulation-based
-  inference.
+## From simulations to trustworthy predictions
 
-::: {.callout-tip}
-New here? Start with [Motivating surrogate modelling](basics/motivation.qmd) and
-work through the **Basics** section in order.
-:::
+1. [Read and validate your simulation bank](package/data.qmd).
+2. Train an MLP baseline, then compare model families relevant to your goal.
+3. [Evaluate withheld trajectories in original units](package/evaluation.qmd).
+4. [Save and reload the model in another process](package/deployment.qmd).
+5. Inspect errors and coverage before choosing where to simulate next.
+
+The library supports deterministic prediction (MLP and autoregressive
+transformer) and stochastic trajectories (flow matching and normalising flow).
+An evaluable flow density can support approximate-likelihood fitting.
+Generated variability is not uncertainty about surrogate accuracy.
+
+CPU training works by default. CUDA is optional in the package API; the
+historical advanced source trainer supports CUDA/DDP and sequence conditioning.
+The new high-level API currently targets static inputs and fixed time grids.
+
+## Installation
+
+~~~bash
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install "metis-surrogate @ git+https://github.com/OJWatson/metis.git"
+metis demo --steps 100 --output metis-demo
+~~~
+
+Python 3.11+ is supported. The import is `metis`; the distribution is
+`metis-surrogate`. This project is not yet published on PyPI, and the existing
+PyPI `metis` package is unrelated.
+
+## Development and provenance
+
+The original model implementations, diagrams and advanced recipes are retained
+in the background sections. The package workflow is the recommended starting
+point for a new researcher. The repository is MIT licensed, with attribution
+and third-party notices preserved.

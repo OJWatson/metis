@@ -1,0 +1,115 @@
+---
+title: "Configure experiments with Hydra"
+---
+
+Hydra and Python are two interfaces to the same package. Hydra composes objects
+and manages experiment configuration; `Surrogate` performs training, inference
+and persistence. The package does not have separate implementations for these
+workflows.
+
+## Packaged configurations
+
+```bash
+metis train --cfg job
+metis train model=mlp training.steps=1000
+metis-train model=flow_matching training.device=cuda training.batch_size=128
+```
+
+Configurations are included in the wheel. Commands work outside the repository.
+Model groups are `mlp`, `transformer`, `flow_matching` and `itarflow`. The default
+dataset is the bundled example. Dimensions are inferred from its schema.
+
+For your data:
+
+```bash
+metis train dataset=parquet dataset.path=/absolute/path/bank.parquet 'dataset.inputs=[contact_rate,recovery_rate]' 'dataset.outputs=[incidence,prevalence]'
+```
+
+A dataset factory can also return a `DatasetSplit` for explicitly prepared
+partitions. Hydra's `_target_` composition lets experienced users supply their
+own importable factory without replacing METIS's training loop. Relative
+Parquet paths are resolved from the launch directory, even with
+`hydra.job.chdir=true`.
+
+## Sweeps
+
+```bash
+metis train --multirun model=mlp,transformer training.learning_rate=0.001,0.0003 evaluation.partition=validation
+```
+
+Each run writes its resolved configuration, complete model, training history and
+evaluation metrics into its own directory. Changing a model changes its training
+objective; compare shared original-unit validation metrics instead of ranking
+unrelated training losses. After choosing the model/settings, assess the
+independent test bank once. Using test metrics to select a sweep winner would
+make those results tuning performance rather than a final test.
+
+Set `plot.enabled=true` with the `[plots]` extra for a diagnostic figure. A
+multirun job that still uses `evaluation.partition=test` emits a warning: it does
+not automatically change the partition or conceal evaluation choices.
+
+## Live Weights & Biases tracking
+
+Tracking is optional and off by default. Install the `[wandb]` extra to stream
+training loss at every optimizer step, validation loss when evaluated, and final
+evaluation metrics. Hydra and Python use the same progress callback.
+
+```bash
+python -m pip install "metis-surrogate[wandb] @ git+https://github.com/OJWatson/metis.git"
+# Local tracking; no account, credentials, or network required:
+metis train training.steps=100 wandb.enabled=true wandb.mode=offline
+```
+
+For an online run, authenticate with `wandb login`, then select the project and,
+if appropriate, your user or team entity:
+
+```bash
+metis train wandb.enabled=true wandb.project=my-surrogate-study wandb.entity=my-team
+```
+
+Do not put credentials in YAML or commit them to the repository. W&B manages
+authentication; METIS passes project settings to the installed W&B client.
+
+Tracking logs the supplied configuration and scalar training/evaluation metrics.
+It does **not** automatically upload simulation tables, predictions, or model
+files. Configurations may contain local data paths and column names. Local METIS
+model and evaluation artifacts are saved independently of tracking.
+
+The same adapter works in a notebook or script:
+
+```python
+from dataclasses import asdict
+from metis import load_example, Surrogate, TrainingConfig
+from metis.tracking import WandbTracker
+
+split = load_example().split(seed=42)
+config = TrainingConfig(steps=100, eval_every=20)
+with WandbTracker(
+    project="my-surrogate-study",
+    mode="offline",  # Change to online after configuring W&B authentication.
+    config={"model": "mlp", "training": asdict(config)},
+    dir="tracking",
+) as tracking:
+    surrogate = Surrogate("mlp").fit(
+        split.train, split.validation, config=config,
+        on_progress=tracking.log_training,
+    )
+    report = surrogate.evaluate(split.test)
+    tracking.log_evaluation(report, prefix="test")
+    surrogate.save("surrogate.pt")
+    report.save("evaluation.json")
+```
+
+The context closes runs on success or failure. `WandbTracker(enabled=False)` is
+a no-op and does not import or require W&B. A custom `on_progress` callback can
+instead update a dashboard or another logger; it receives a copied dictionary
+with `step`, `train_loss` and, on validation steps, `validation_loss`.
+
+## Existing source recipes
+
+The original `train.py` and configs remain available for advanced CUDA/DDP and
+sequence-conditioning experiments with `[legacy]` installed. New experiments
+using static inputs should use `metis train` so Python and Hydra share portable
+artifacts and scientific diagnostics. Historical checkpoints cannot be loaded
+by `Surrogate.load`; their normalization was not bundled. Preserve the original
+bank when using those old checkpoints.

@@ -1,0 +1,9 @@
+_target_: metis.Surrogate
+model: itarflow
+model_options:
+  channels: 64
+  num_layers: 2
+  num_blocks: 2
+  num_heads: 4
+  num_static_tokens: 4
+  patch_size: 1

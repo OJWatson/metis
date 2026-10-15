@@ -8,7 +8,7 @@ Most of these methods can be described as either amortising the likelihood (Neur
 
 ![Overview of NLE, NRE and NPE. Taken from Cranmer et. al. 2020.](images/nle_npe_nre.png)
 
-In brief, NLE fits a neural network with a tractable likelihood to simulated data, NRE learns $\frac{p(x|\theta)}{p(\theta)}$ typically through a classifier or contrastive loss and NPE learns to perform posterior inference for a given simulator and prior in a single forward pass. Unlike NPE, NLE and NRE must be substituted into inference pipelines (e.g. MCMC, Variational Inference) *every time* a new inference is required.
+In brief, NLE fits a neural network with a tractable likelihood to simulated data, NRE learns $\frac{p(x|\theta)}{p(x)}$ typically through a classifier or contrastive loss and NPE learns to perform posterior inference for a given simulator and prior in a single forward pass. Unlike NPE, NLE and NRE must be substituted into inference pipelines (e.g. MCMC, Variational Inference) *every time* a new inference is required.
 
 In Metis we don't aim to support every SBI use-case, but as our existing Normalising Flow surrogates have tractable likelihoods they can serve as NLE models.
 

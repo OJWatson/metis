@@ -1,0 +1,7 @@
+_target_: metis.Surrogate
+model: transformer
+model_options:
+  n_layer: 2
+  n_head: 4
+  n_kv_head: 4
+  n_embd: 64

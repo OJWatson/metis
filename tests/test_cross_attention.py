@@ -2,13 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dataclasses import dataclass
-from models.utils.cross_attention import (
+from metis.models.utils.cross_attention import (
     CrossAttention,
     CrossAttnKVCache,
     CrossAttentionConfig,
     precompute_rotary_embeddings,
 )
-from models.transformer import norm
+from metis.models.transformer import norm
 import pytest
 
 
@@ -207,7 +207,9 @@ def test_casuality_smaller_x_seq():
             current_x_pos=None,
         )
 
-    out_original.shape == (batch_size, x_seq_len, n_embd), "Output shape is incorrect"
+    assert out_original.shape == (batch_size, x_seq_len, n_embd), (
+        "Output shape is incorrect"
+    )
 
     # Peturb token at a point beyond the x-seq's last pos
     t = x_seq_len
@@ -290,7 +292,7 @@ def test_kv_cache_matches_forward():
         new_x = cross_attn(
             v1_uncached_x,
             cond_seq,
-            (cos[:, i : i + 1], sin[:, i : i + 1]),
+            (cos[:, : i + 1], sin[:, : i + 1]),
             (cos, sin),
             kv_cache=None,
             current_x_pos=None,
@@ -450,3 +452,24 @@ def test_cross_attention_learns_2z():
     assert final_loss <= 0.3, (
         f"Cross-attention failed to learn 2z, final loss={final_loss:.4f}"
     )
+
+
+def test_cached_chunk_uses_absolute_query_positions():
+    torch.manual_seed(16)
+    cfg = ToyModuleConfig(
+        n_embd=16, seq_len=8, cross_attn=CrossAttentionConfig(n_head=2, n_kv_head=1)
+    )
+    attention = CrossAttention(cfg, 0).eval()
+    torch.nn.init.normal_(attention.c_proj.weight, std=0.2)
+    x = torch.randn(2, 8, 16)
+    cond = torch.randn(2, 8, 16)
+    cos, sin = precompute_rotary_embeddings(8, 8)
+    cache = CrossAttnKVCache(2, 1, 8, 8, 1, torch.device("cpu"), torch.float32)
+    with torch.no_grad():
+        expected = attention(x, cond, (cos, sin), (cos, sin))
+        first = attention(
+            x[:, :3], cond, (cos[:, :3], sin[:, :3]), (cos, sin), cache, 2
+        )
+        second = attention(x[:, 3:6], None, (cos[:, 3:6], sin[:, 3:6]), None, cache, 5)
+    torch.testing.assert_close(first, expected[:, :3])
+    torch.testing.assert_close(second, expected[:, 3:6])

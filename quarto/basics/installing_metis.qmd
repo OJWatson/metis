@@ -1,36 +1,64 @@
 ---
-title: "Installing Metis"
+title: "Install the advanced source workflow"
 ---
 
-Metis is implemented in Python and its dependencies are manged with [uv](https://docs.astral.sh/uv/). While you can install Metis without uv, this is **not recommended**.
+::: {.callout-note}
+For ordinary Python use or the installed `metis train` Hydra interface, start
+with the [package quickstart](../package/quickstart.qmd). That workflow supports
+CPU training and saves portable artifacts. Both pip and uv are supported.
 
-## Installation with uv
+This page covers the historical `train.py` workflow in a source checkout. It
+exposes advanced CUDA/DDP and sequence-conditioning settings, requires a
+compatible CUDA PyTorch installation and NVIDIA GPU, and uses a different
+checkpoint format.
+:::
 
-Before you begin install uv and git as system packages on your operating system. Then,
+## Set up a source checkout
 
-1. Clone the Metis repository via 
-    
-    ```bash
-    git clone ...
-    ```
-2. Change directory
-    
-    ```bash
-    cd ...
-    ```
-3. Use uv to install the correct version of Python and all of the required dependencies
+Install [uv](https://docs.astral.sh/uv/) and Git, then run:
 
-    ```bash
-    uv sync
-    ```
-::: {.callout-tip}
- If you would like to contribue to the development of Metis (or just run the test suite), use
 ```bash
-    uv sync --dev
+git clone https://github.com/OJWatson/metis.git
+cd metis
+uv sync --extra legacy
 ```
-and then
+
+The `legacy` extra supplies the historical trainer's plotting, terminal and
+Weights & Biases dependencies. Base-package installation alone does not supply
+them. Check that your PyTorch build and GPU driver are compatible before using
+this trainer; installing dependencies does not configure GPU drivers.
+
+Keep the extra explicit when running historical recipes:
+
 ```bash
-uv run pytest -v
+uv run --extra legacy train.py --config-name default
 ```
-to run the full test suite.
-::: 
+
+For the Python dependencies used by the historical notebooks and documentation,
+include the `docs` extra too:
+
+```bash
+uv sync --extra legacy --extra docs
+```
+
+Use the resulting environment in your notebook interface. The Quarto CLI is a
+separate system installation; the `docs` extra does not install it. These
+dependencies also do not make historical CUDA training cells run on CPU.
+
+## Develop and run tests
+
+uv includes the development dependency group by default. Include the pandas
+extra to exercise the optional pandas adapter tests as well as the legacy
+compatibility tests:
+
+```bash
+uv sync --extra legacy --extra pandas
+uv run --extra legacy --extra pandas pytest -v
+uv run ty check src
+uv run ruff check src tests
+```
+
+The automated numerical test suite runs on CPU. Passing those tests does not
+establish GPU compatibility or scientific accuracy. See
+[CONTRIBUTING.md](https://github.com/OJWatson/metis/blob/main/CONTRIBUTING.md)
+for the build, installed-wheel checks and documentation workflow.
