@@ -42,18 +42,15 @@ def check(path, *, timeout=300):
             notebook, timeout=timeout, kernel_name="python3",
             resources={"metadata": {"path": directory}},
         ).execute()
-        if Path(path).stem == "quickstart":
-            output = Path(directory) / "quickstart-output"
-            if not (output / "surrogate.pt").exists():
-                raise ValueError("The beginner notebook did not save a surrogate")
-            if not (output / "evaluation.json").exists():
-                raise ValueError("The beginner notebook did not save an evaluation")
+        if Path(path).stem == "saving-and-loading":
+            if not (Path(directory) / "sirds_surrogate.pt").exists():
+                raise ValueError("The saving tutorial did not write its surrogate artifact")
     print(f"Executed {summary['code_cells']} tutorial cells from {path}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("path", nargs="?", default="quarto/_site/package/quickstart.ipynb")
+    parser.add_argument("path", nargs="?", default="quarto/_site/basics/saving-and-loading.ipynb")
     parser.add_argument("--outputs-only", action="store_true")
     args = parser.parse_args()
     target = Path(args.path)

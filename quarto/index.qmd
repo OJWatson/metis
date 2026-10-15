@@ -1,35 +1,46 @@
 ---
 title: "METIS"
+subtitle: "Configurable neural network surrogates for stochastic timeseries simulators"
+toc: false
 ---
 
-METIS learns a fast surrogate from a bank of simulator runs. Use it to make
-predictions, generate new trajectories, or supply a learned density to a fitting
-routine.
+METIS is a Python package for training neural network surrogate (emulator)
+models that stand in for expensive stochastic simulators. Instead of running
+a slow simulator every time you need a sample, you train a model once and then
+generate realisations cheaply.
 
-[Train your first surrogate](package/quickstart.qmd){.btn .btn-primary}
-[Install locally](basics/installing_metis.qmd){.btn .btn-secondary}
+Install METIS in your own project to load simulations, split your data, train
+and evaluate a surrogate, and save it for later predictions. Use Python functions
+in a notebook or script, or [Hydra](https://hydra.cc) configuration to swap
+models, datasets and training settings by editing YAML. Both use the same package.
 
-The tutorials show executed code, plots and results. Download a **Jupyter**
-notebook or choose **Open in Colab** under **Other Formats** to run one yourself.
-In Colab, choose **Runtime → Run all**; the first cell prepares the environment.
+### Overview of METIS features
 
-## Start with your simulations
+* Implementations of MLPs, Autoregressive Transformers, Flow Matching and Normalising Flows.
+* Support for static parameter conditioning and sequence conditioning.
+* Data loading from Parquet, data frames and arrays, with grouped train/validation/test splits.
+* Evaluation and visualisation of predictions in the simulator's original units.
+* Saved models that can be loaded in another script or application.
+* Weights & Biases integration for hyperparameter sweeping and experiment tracking.
 
-1. [Work through a CSV example](package/own-bank.qmd) to load, train and save a model.
-2. [Compare model families](package/model-choice.qmd) on held-out simulations.
-3. [Check predictions and variability](package/evaluation.qmd) before using the surrogate.
-4. [Reload it in your own application](package/deployment.qmd).
+## How these docs are organised
 
-Use the Python API in notebooks and applications, or [Hydra](package/hydra.qmd)
-for configuration files, experiment overrides and sweeps. Both use the same
-training and evaluation code.
+We use the **SIRDS epidemic model throughout**, so you only need to understand
+one simulator as you work through the examples.
 
-## Understand the models
+- **[Basics of surrogate modelling](basics/motivation.qmd)** — what surrogate
+  modelling is, the SIRDS example simulator, preparing data, installing METIS,
+  a Hydra crash course, and training and saving your first models.
+- **[Different kinds of surrogates](models/overview.qmd)** — the model families
+  on offer, when to reach for each, and how their configurations work.
+- **[Utilities and advanced features](utils/distributed-training.qmd)** — training on multiple GPUs.
+- **[Sweeping](sweeping/overview.qmd)** — tuning hyperparameters with Weights & Biases.
+- **[SBI](sbi/overview.qmd)** — using a trained surrogate for simulation-based inference.
+- **[Reference](package/api.qmd)** — API details, troubleshooting and migration from older METIS work.
 
-METIS includes [MLPs](models/mlp.qmd) and [transformers](models/transformer.qmd)
-for deterministic predictions, plus [flow matching](models/flow-matching.qmd)
-and [normalising flows](models/normalising-flow.qmd) for stochastic trajectories.
-Each model tutorial explains the idea and runs a small example.
-
-For reference, see the [data format](package/data.qmd),
-[API](package/api.qmd) and [troubleshooting](package/troubleshooting.qmd).
+::: {.callout-tip}
+New here? Start with [Motivating surrogate modelling](basics/motivation.qmd) and
+work through the **Basics** section in order. The worked examples show their
+executed outputs. Choose **Jupyter** to download a notebook, or **Open in Colab**
+to run it in your browser; its first cell prepares the environment.
+:::

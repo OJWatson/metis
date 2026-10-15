@@ -33,7 +33,7 @@ architecture, optimizer betas, schedule, precision and split explicitly when
 comparing methods. Data validation and train-only scaling also change behavior.
 Explicit preprocessing now uses `metis.preprocessing.truncate_simulations` and
 `initialize_static_inputs`; these preserve group identity and do not silently
-rebase time. See [data preparation](data.qmd).
+rebase time. See [data preparation](../basics/preparing-data.qmd).
 The corrected final Heun integration step changes generated samples, while its
 flow-matching fitting objective is unchanged.
 

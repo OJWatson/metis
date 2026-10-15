@@ -1,7 +1,6 @@
-"""A reproducible CSV-to-surrogate handoff using a small synthetic bank.
+"""A reproducible CSV-to-surrogate handoff using the bundled SIRDS bank.
 
-The toy recurrence is an installation exercise, not an ABM benchmark. Replace
-its CSV with your own bank only after adapting the explicit column lists.
+Replace its CSV with your own bank after adapting the explicit column lists.
 """
 
 import argparse
@@ -11,29 +10,26 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from metis import SimulationDataset, Surrogate, TrainingConfig
+from metis import SimulationDataset, Surrogate, TrainingConfig, load_example
 
 
-INPUTS = ["decay", "forcing"]
-OUTPUTS = ["stock", "flux"]
+INPUTS = ["I_0", "beta", "gamma", "omega", "mu"]
+OUTPUTS = ["S_t", "I_t", "R_t", "D_t"]
 
 
 def make_bank(path):
-    """Write 30 scenarios, three independent realizations and 12 timepoints."""
-    rng = np.random.default_rng(42)
-    rows = []
-    for decay in np.linspace(0.05, 0.5, 6):
-        for forcing in np.linspace(0.2, 1.0, 5):
-            for rep in range(3):
-                stock = 10.0
-                for t in range(12):
-                    flux = decay * stock + rng.normal(0, 0.05)
-                    rows.append({
-                        "decay": float(decay), "forcing": float(forcing),
-                        "rep": rep, "t": t, "stock": stock, "flux": flux,
-                    })
-                    stock = (1 - decay) * stock + forcing + rng.normal(0, 0.1)
-    pl.DataFrame(rows).write_csv(path)
+    """Write the same 100 SIRDS settings × five realizations × 40 days as the docs."""
+    bank = load_example()
+    frames = []
+    for inputs, outputs, rep in zip(bank.inputs, bank.outputs, bank.replicate_ids):
+        frames.append(pl.DataFrame({
+            **{name: outputs[:, i] for i, name in enumerate(OUTPUTS)},
+            **{name: np.repeat(value, len(bank.times))
+               for name, value in zip(INPUTS, inputs)},
+            "t": bank.times,
+            "rep": np.repeat(rep, len(bank.times)),
+        }))
+    pl.concat(frames).write_csv(path)
 
 
 def main(argv=None):
@@ -68,7 +64,7 @@ def main(argv=None):
     assert np.isfinite(prediction).all()
     np.save(args.output / "prediction.npy", prediction)
     print(json.dumps(report.by_output.to_dicts(), indent=2))
-    print("Synthetic installation exercise; no scientific accuracy claim.")
+    print("SIRDS installation exercise; assess accuracy before downstream use.")
 
 
 if __name__ == "__main__":

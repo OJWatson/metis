@@ -1,5 +1,8 @@
 ---
-title: "Prepare a simulation bank"
+title: "Walkthrough: Preparing data for METIS"
+aliases:
+  - /package/data.html
+  - /package/own-bank.html
 jupyter: python3
 metis-notebook: true
 format:
@@ -9,115 +12,148 @@ execute:
   eval: true
 ---
 
-METIS needs simulator inputs paired with their output trajectories. You can
-supply arrays, a data frame or a Parquet file. This walkthrough creates a small
-SIRDS bank and saves it for reuse.
+Before training a surrogate, you need a dataset of simulator inputs (parameters)
+paired with outputs (realisations). We will use the [SIRDS model](sirds-example.qmd)
+to see how these are organised, then load and split the data with METIS.
 
-## One row per time point
+::: {.callout-tip}
+The package includes a small SIRDS bank so you can follow the whole walkthrough
+without running the simulator yourself. The same loading functions accept data
+from your own simulator, whether it was written in Python, R or another language.
+:::
 
-Use one column for each input and output, a time column (`t`) and a replicate
-identifier (`rep`). Inputs stay constant within a realisation. Replicate IDs
-separate stochastic realisations at the same inputs.
+## Flattening a single realisation
+
+A simulation table has one row per time point. For example, take the infected
+counts from the first SIRDS realisation:
 
 ```{python}
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from metis import SimulationDataset
-from metis.datasets.sirds import simulate_sirds
+from metis import SimulationDataset, load_example
 
-parameters = dict(I0=0.005, beta=0.4, gamma=0.1, omega=0.02, mu=0.01)
-S, I, R, D = simulate_sirds(**parameters, T=40, seed=0)
-frame = pd.DataFrame({
-    "rep": 0, "t": np.arange(1, 41),
-    "S": S[1:], "I": I[1:], "R": R[1:], "D": D[1:],
-    **parameters,
-})
-frame.head()
-```
+example = load_example()
+one_run = pd.DataFrame(example.outputs[0], columns=example.output_names)
+one_run["t"] = example.times
 
-Here we omit day zero, the known initial state. We use exactly the same daily
-grid in every realisation; METIS does not interpolate missing times.
-
-## Sample the input space
-
-For a quick example, vary transmission and recovery rates at 30 settings and
-simulate three replicates at each. Keep the other inputs fixed. The independent
-uniform draws below are a demonstration design; choose ranges and a sampling
-design appropriate to your model for a research bank.
-
-```{python}
-rng = np.random.default_rng(42)
-settings = pd.DataFrame({
-    "beta": rng.uniform(0.15, 0.7, 30),
-    "gamma": rng.uniform(0.05, 0.25, 30),
-})
-fig, ax = plt.subplots(figsize=(5, 3))
-ax.scatter(settings.beta, settings.gamma)
-ax.set(xlabel="Transmission rate (beta)", ylabel="Recovery rate (gamma)",
-       title="SIRDS example: 30 parameter settings")
+fig, ax = plt.subplots(figsize=(6, 3))
+ax.plot(one_run.t, one_run.I_t)
+ax.set(xlabel="Time (days)", ylabel="Infected people")
 plt.show()
+one_run[["t", "I_t"]].head()
 ```
 
-## Simulate and combine
+This realisation has 40 rows, one for each day. The other compartment counts
+can be stored as additional columns on the same rows.
+
+## Multiple SIRDS realisations
+
+We also need to store the simulator inputs and distinguish realisations with
+the same inputs. Input parameters become columns repeated along each
+trajectory. A `rep` column identifies each realisation at that parameter
+setting.
+
+Here we turn the bundled bank's arrays into this long table:
 
 ```{python}
 frames = []
-for setting, row in settings.iterrows():
-    inputs = dict(I0=0.02, beta=row.beta, gamma=row.gamma, omega=0.02, mu=0.01)
-    for rep in range(3):
-        S, I, R, D = simulate_sirds(**inputs, T=40, seed=3 * setting + rep)
-        frames.append(pd.DataFrame({
-            "rep": rep, "t": np.arange(1, 41),
-            "S": S[1:], "I": I[1:], "R": R[1:], "D": D[1:],
-            **inputs,
-        }))
-frame = pd.concat(frames, ignore_index=True)
-print(f"{len(settings)} settings × 3 replicates × 40 days = {len(frame):,} rows")
-frame.head()
+for inputs, outputs, rep in zip(
+    example.inputs, example.outputs, example.replicate_ids
+):
+    frame = pd.DataFrame(outputs, columns=example.output_names)
+    frame["t"] = example.times
+    frame["rep"] = rep
+    for name, value in zip(example.input_names, inputs):
+        frame[name] = value
+    frames.append(frame)
+
+df = pd.concat(frames, ignore_index=True)
+df[["I_0", "beta", "gamma", "omega", "mu", "rep", "t", "S_t", "I_t", "R_t", "D_t"]].head()
 ```
 
-## Validate and split
+The same `rep` values can be reused at different parameter settings. All five
+realisations at one setting share their input values; their outputs differ
+because the simulator is stochastic.
 
-Tell METIS which columns are inputs and outputs. It checks the grid, duplicate
-rows, missing values and whether inputs stay constant within each realisation.
-The split keeps all replicates at the same parameter setting together.
+## Sampling the parameter space
 
-```{python}
-bank = SimulationDataset.from_frame(
-    frame,
-    inputs=["I0", "beta", "gamma", "omega", "mu"],
-    outputs=["S", "I", "R", "D"],
-)
-split = bank.split(seed=42)
-print("Input array:", bank.inputs.shape)
-print("Output array:", bank.outputs.shape)
-print("Realisations in train / validation / test:",
-      len(split.train.inputs), len(split.validation.inputs), len(split.test.inputs))
-```
+When building a simulation bank, consider which regions of the parameter space
+you need to cover. A simulator may be especially sensitive in some regions,
+and parameters may be physically constrained. The SIRDS example samples inputs
+uniformly within specified ranges. Latin hypercube sampling is another common
+choice for spreading a limited number of simulations across the input space.
+
+The plot below shows the 100 settings already present in our bank. These are
+the same settings we will use for training, rather than another example dataset.
 
 ```{python}
-#| fig-cap: "SIRDS example bank: infected trajectories from the first four parameter settings, with three replicates per setting."
-fig, axes = plt.subplots(1, 4, figsize=(11, 3), sharex=True, sharey=True)
-for ax, setting in zip(axes, range(4)):
-    start = setting * 3 * 40
-    subset = frame.iloc[start:start + 3 * 40]
-    for _, trajectory in subset.groupby("rep"):
-        ax.plot(trajectory.t, trajectory.I, alpha=0.7)
-    ax.set(title=f"Setting {setting + 1}", xlabel="Day")
-axes[0].set_ylabel("Infected people")
+#| fig-cap: "Bundled SIRDS bank: 100 parameter settings, with five stochastic realisations at each setting."
+settings = df[list(example.input_names)].drop_duplicates()
+fig, axes = plt.subplots(1, 2, figsize=(9, 3.5))
+axes[0].scatter(settings.beta, settings.gamma, s=20)
+axes[0].set(xlabel="Transmission rate (beta)", ylabel="Recovery rate (gamma)")
+axes[1].scatter(settings.omega, settings.mu, c=settings.I_0, s=20, cmap="viridis")
+axes[1].set(xlabel="Waning rate (omega)", ylabel="Death rate (mu)")
+fig.colorbar(axes[1].collections[0], ax=axes[1], label="Initial infected fraction")
 fig.tight_layout()
 plt.show()
+print(f"{len(settings)} settings × 5 realisations × 40 days = {len(df):,} rows")
 ```
 
-## Save for another session
+## Loading the full dataset
+
+Tell METIS which columns contain the inputs and outputs:
 
 ```{python}
-frame.to_parquet("sirds_data.parquet", index=False)
-print("Saved sirds_data.parquet")
+input_names = ["I_0", "beta", "gamma", "omega", "mu"]
+output_names = ["S_t", "I_t", "R_t", "D_t"]
+bank = SimulationDataset.from_frame(df, inputs=input_names, outputs=output_names)
+print("Inputs (realisations, parameters):", bank.inputs.shape)
+print("Outputs (realisations, time points, compartments):", bank.outputs.shape)
 ```
 
-You can now [train a surrogate](../package/quickstart.qmd), replacing
-`load_example()` with `SimulationDataset.from_parquet("sirds_data.parquet", ...)`
-and the input/output names above. For CSV files from your own model, follow the
-[own-bank walkthrough](../package/own-bank.qmd).
+`from_frame` accepts pandas or Polars data frames. It checks that values are
+finite, that there are no duplicate observations, and that every realisation
+has the same complete time grid. The default time and replicate column names
+are `t` and `rep`; use the `time=` and `replicate=` arguments if yours differ.
+
+You can save the table as a Parquet file and load it directly in another session:
+
+```{python}
+df.to_parquet("sirds_data.parquet", index=False)
+bank = SimulationDataset.from_parquet(
+    "sirds_data.parquet", inputs=input_names, outputs=output_names
+)
+print(f"Loaded {len(bank)} SIRDS realisations")
+```
+
+For your own model, replace `df` or the Parquet path and supply your input and
+output column names. Keep each input constant within a realisation, and keep
+all realisations on the same time grid.
+
+## Splitting for training and evaluation
+
+We need some simulations to fit the model and others to check it. METIS can
+make a reproducible split:
+
+```{python}
+split = bank.split(validation_fraction=0.2, test_fraction=0.2, seed=42)
+pd.DataFrame([
+    {"Partition": name, "Parameter settings": len(set(part.group_keys)),
+     "Realisations": len(part)}
+    for name, part in [
+        ("Training", split.train), ("Validation", split.validation), ("Test", split.test)
+    ]
+])
+```
+
+The training set is used to fit the neural network. The validation set helps
+choose training settings and the best saved weights. The test set is kept
+aside for the final check. All realisations at the same inputs stay together,
+so the model must predict at parameter settings it has not seen in training.
+Scaling is fitted on the training data automatically when you call `fit`.
+
+Next, [install METIS in your own project](installing_metis.qmd), then follow
+the [Hydra crash course](hydra.qmd) before training. If you are using Colab,
+the notebook setup cell handles installation for you.

@@ -9,7 +9,7 @@ and optional dependencies in `.venv`; no manual activation is needed.
 git clone https://github.com/OJWatson/metis.git
 cd metis
 uv sync --locked --all-extras
-uv run --locked --all-extras pytest
+uv run --locked --all-extras python -m pytest
 uv run --locked --all-extras ruff check src tests
 uv run --locked --all-extras ty check src
 uv build
@@ -53,6 +53,9 @@ errors, unexecuted cells or missing figures. Notebook tutorials declare
 `metis-notebook: true` and both `html` and `ipynb` formats; reference pages
 remain HTML only. Keep examples self-contained, CPU-friendly and free of
 external accounts or private data. Use `{python}` cells for runnable code.
+Use SIRDS throughout, with the bundled bank and the same grouped split. Extend
+the original walkthrough where a topic belongs instead of adding a competing
+quickstart or another example data-generating process.
 
 A shared setup cell is added to downloads for Colab; do not repeat installation
 commands in tutorial sources. Every notebook records the source commit and
@@ -61,14 +64,14 @@ branch and deploys the website only after a successful main-branch build.
 To rerun one exported notebook from a fresh directory:
 
 ~~~bash
-uv run --locked --all-extras python scripts/check_tutorial_notebook.py quarto/_site/package/quickstart.ipynb
+uv run --locked --all-extras python scripts/check_tutorial_notebook.py quarto/_site/basics/saving-and-loading.ipynb
 ~~~
 
 Before a public package-index release, review the notices in
 ATTRIBUTION.md, review the dependency range and run GPU smoke tests on the
 hardware configurations that will be advertised.
 
-Run the independent own-bank and differentiable-likelihood exercises:
+Run the independent SIRDS data-loading and differentiable-likelihood exercises:
 
 ```bash
 uv run --locked --all-extras python examples/own_bank.py --steps 20 --output /tmp/metis-own-bank

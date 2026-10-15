@@ -2,27 +2,34 @@
 title: "Why sweep?"
 ---
 
-Hyperparameters control the architecture and learning algorithm: for example,
-network width, learning rate and training duration. Their effect depends on the
-simulation bank, so presets are starting points rather than selected optima.
+## Sensitivity to hyperparameters
 
-METIS splits by scenario group: all realizations in a group remain together.
-Train weights on training groups, choose settings on validation groups and
-reserve test groups for the final selected model. To test a new input region, hold that region out explicitly.
+The quality of a model depends on its training data, learning algorithm and
+*hyperparameters*: settings such as learning rate and network width. Models can
+be sensitive to these settings, so *sweeping* or *tuning* them can substantially
+improve performance.
 
-## A reproducible comparison
+Large neural networks can memorise their training data. We therefore need
+held-out data to assess how well a model generalises. METIS partitions a
+simulation bank into training, validation and test sets **by parameter group**,
+keeping all realisations of a SIRDS parameter setting together. Fit the model on
+training data, choose hyperparameters using validation data, and use the test
+set for the final evaluation.
 
-1. Fix a bank version, group split, scientific outputs and acceptable error.
-2. Choose candidate architectures and a bounded parameter search.
-3. Compare original-unit validation metrics shared by the model families.
-4. Inspect autonomous trajectories, distributional calibration where relevant,
-   and physical constraints, not training loss alone.
-5. Evaluate the selected procedure on the independent test bank.
+## Basic sweeping
 
-Changing a model changes its training objective, so MSE, flow-matching loss and
-negative log density cannot be ranked as though they were the same metric.
-If you tune settings after seeing test results, reserve a new test bank.
+The basic hyperparameter sweep workflow is:
 
-Use [Hydra multirun](../package/hydra.qmd#sweeps) for local configuration grids,
-or [W&B sweeps](sweep-config.qmd) for tracked searches. W&B remains optional;
-both routes use the same installed training and artifact code.
+1. Choose hyperparameters to fix (e.g. batch size) and sweep over (e.g. learning rate).
+2. Choose the validation metric to target.
+3. Choose how to sample the sweep space (e.g. random search or Bayesian optimisation) and how many training runs to make.
+4. Launch one or more sweep agents.
+5. Analyse the validation results and, if necessary, launch a more focused sweep.
+
+When comparing different model families, use a common evaluation metric such
+as RMSE in the original output units. Their training losses have different
+meanings and cannot be compared directly.
+
+The next two pages introduce [Weights & Biases](wandb.qmd) and walk through a
+[sweep on SIRDS](sweep-config.qmd). For a small local grid, Hydra's
+[`--multirun`](../basics/hydra.qmd) also works without W&B.

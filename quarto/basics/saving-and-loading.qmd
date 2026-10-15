@@ -1,48 +1,162 @@
 ---
-title: "Save a model or resume training"
+title: "Saving and loading models"
+aliases:
+  - /package/deployment.html
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
+execute:
+  eval: true
 ---
 
-Save an **inference artifact** to reuse a fitted model. Use a **training
-checkpoint** to continue an interrupted fit.
+Once trained, we'd like to use our surrogate in downstream applications: a
+model fitting routine, a script exploring scenarios, or an interactive
+dashboard. We may also want to resume training after an interruption. METIS
+provides a saved surrogate for predictions and a training checkpoint for
+continuing a fit.
 
-## Reuse a fitted model
+## Saving a fitted surrogate
 
-After training `model` in the [quickstart](../package/quickstart.qmd):
+This page uses the MLP from the [training walkthrough](training.qmd). To make
+the notebook runnable on its own, the setup below repeats that short SIRDS fit
+if the saved model is not already present.
+
+```{python}
+#| code-fold: true
+#| code-summary: "Load the SIRDS example and prepare the MLP if needed"
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from metis import Surrogate, TrainingConfig, load_example
+
+bank = load_example()
+split = bank.split(seed=42)
+if Path("sirds_surrogate.pt").exists():
+    model = Surrogate.load("sirds_surrogate.pt")
+else:
+    model = Surrogate("mlp").fit(
+        split.train, split.validation,
+        config=TrainingConfig(steps=1000, batch_size=64, eval_every=100, seed=42),
+    )
+```
+
+Save the fitted model with:
+
+```{python}
+model.save("sirds_surrogate.pt")
+```
+
+The file includes the model architecture, weights, input and output names,
+time grid and fitted scalers. You can copy it to another computer with METIS
+installed; the original simulations are not needed for prediction.
+
+## Loading and making predictions
+
+Load the model and supply named simulator inputs. Here we use one held-out
+SIRDS setting so we can compare its prediction with the original simulations:
+
+```{python}
+restored = Surrogate.load("sirds_surrogate.pt", device="cpu")
+new_inputs = dict(zip(bank.input_names, split.test.inputs[0]))
+prediction = restored.predict(new_inputs)
+print("Prediction shape (settings, time points, outputs):", prediction.shape)
+print("Outputs:", restored.output_names)
+print("Same predictions after loading:", np.allclose(
+    prediction, model.predict(new_inputs)
+))
+```
+
+The prediction is already in population counts, on the time grid used for
+training. There is no need to rebuild the neural network or undo scaling.
+As in the training walkthrough, METIS warns if a held-out input is beyond a
+training range.
+
+```{python}
+#| fig-cap: "Saved and reloaded MLP fitted on the bundled SIRDS training partition, compared with all five realisations at one test setting."
+indices = [i for i, key in enumerate(split.test.group_keys)
+           if key == split.test.group_keys[0]]
+fig, axes = plt.subplots(1, 4, figsize=(11, 3), sharex=True)
+for channel, (ax, name) in enumerate(zip(axes, bank.output_names)):
+    ax.plot(bank.times, split.test.outputs[indices, :, channel].T,
+            color="C1", alpha=0.5, linewidth=1)
+    ax.plot([], [], color="C1", label="SIRDS realisations")
+    ax.plot(restored.times, prediction[0, :, channel], color="C0", label="Loaded MLP")
+    ax.set(title=name, xlabel="Time (days)")
+axes[0].set_ylabel("People")
+axes[0].legend(fontsize=8)
+fig.tight_layout()
+plt.show()
+```
+
+To make predictions for several scenarios at once, pass a data frame with the
+same input column names:
+
+```{python}
+scenarios = pd.DataFrame(split.test.inputs[::5], columns=bank.input_names)
+trajectories = restored.predict(scenarios)
+print(f"Predicted {len(trajectories)} SIRDS scenarios")
+```
+
+For a saved stochastic surrogate, use `sample(new_inputs, n_samples=100,
+seed=42)` to generate multiple realisations. The result has shape
+`(settings, samples, time points, outputs)`. These are the same methods you
+would call inside a dashboard or a model fitting script.
+
+## Checkpointing
+
+For a longer training run, save checkpoints periodically so an interruption
+does not lose all progress. The checkpoint contains optimizer and random
+states as well as weights. In Python, set these fields in `TrainingConfig`:
 
 ```python
-from metis import Surrogate
-
-model.save("surrogate.pt")
-restored = Surrogate.load("surrogate.pt", device="cpu")
-predictions = restored.predict(new_inputs)
+config = TrainingConfig(
+    steps=10000,
+    checkpoint_every=500,
+    checkpoint_dir="checkpoints/sirds",
+)
+model = Surrogate("mlp").fit(split.train, split.validation, config=config)
 ```
 
-`new_inputs` uses the fitted input names or column order. The artifact contains
-the weights, architecture, scalers and time grid; you do not need the original
-simulation bank to make predictions. See [deployment](../package/deployment.qmd)
-for a complete save/load example.
+To resume an interrupted run, repeat its settings and add `resume_from`:
 
-## Resume an interrupted run
+```python
+config = TrainingConfig(
+    steps=10000,
+    checkpoint_every=500,
+    checkpoint_dir="checkpoints/sirds",
+    resume_from="checkpoints/sirds/last.pt",
+)
+model = Surrogate("mlp").fit(split.train, split.validation, config=config)
+```
 
-Enable checkpoints at the start of a long run:
+`steps` is the original total, not a number of extra updates. Keep the same
+bank, split, model and training settings; METIS checks them before continuing.
+After training, call `model.save(...)` to create the file used for predictions.
+A training checkpoint cannot be loaded with `Surrogate.load`.
+
+The same options are available through Hydra:
 
 ```bash
-uv run metis train training.steps=10000 training.checkpoint_every=500 training.checkpoint_dir=/absolute/path/checkpoints/run-a
+uv run metis train \
+  hydra.run.dir=outputs/sirds-training \
+  training.steps=10000 \
+  training.checkpoint_every=500 \
+  training.checkpoint_dir=checkpoints/sirds
 ```
 
-Replace the path with your own directory. METIS writes `last.pt` at the requested
-interval and at completion, and updates `best.pt` when validation improves.
-To resume, repeat the original settings and add:
+Hydra puts the relative checkpoint directory inside the run directory. To
+resume from the same working directory, use the full path from there:
 
 ```bash
-uv run metis train training.steps=10000 training.checkpoint_every=500 training.checkpoint_dir=/absolute/path/checkpoints/run-a training.resume_from=/absolute/path/checkpoints/run-a/last.pt
+uv run metis train \
+  hydra.run.dir=outputs/sirds-training \
+  training.steps=10000 \
+  training.checkpoint_every=500 \
+  training.checkpoint_dir=checkpoints/sirds \
+  training.resume_from=outputs/sirds-training/checkpoints/sirds/last.pt
 ```
 
-`steps` remains the original total. The bank, model, optimizer settings and
-device topology must match; METIS checks them before continuing. Checkpoint
-location and frequency may change.
-
-In Python these are fields of `TrainingConfig`. A training checkpoint includes
-optimizer and random states and is not accepted by `Surrogate.load`; save the
-finished inference artifact separately. For older raw checkpoints, see
-[migration](../package/migration.qmd).
+See the [Hydra guide](hydra.qmd) for longer command-line workflows.

@@ -1,60 +1,110 @@
 ---
-title: "Sweep the installed Hydra workflow"
+title: "METIS sweep config"
 ---
 
-Start with a fixed grouped split and a validation partition. The installed
-Hydra interface runs the same fitting/evaluation code as Python:
+## Walkthrough: sweeping on SIRDS
 
-```bash
-uv run metis train --multirun model=mlp,transformer training.learning_rate=0.001,0.0003 evaluation.partition=validation
-```
+In this walkthrough we'll set up a sweep for an MLP on the same SIRDS simulation
+bank. As with training, sweeps in METIS are driven through a configuration.
 
-Each run saves its own configuration, portable model and diagnostics. This is a
-small comparison, not a recommended training budget. Select using common
-original-unit errors; training losses have different meanings across families.
-Reserve the test partition until you have selected the model and settings.
+### 1. Hyperparameters to sweep over
 
-## W&B-managed sweeps
+We'll vary the learning rate, warmup fraction, number of model blocks and hidden
+dimension. Batch size and training duration stay fixed. The cosine schedule
+uses the warmup fraction to increase the learning rate at the start of training
+before gradually reducing it.
 
-Add the `[wandb]` extra and authenticate with `uv run wandb login` for an online
-sweep. A W&B configuration can invoke the installed Hydra entry point:
+If you're starting with a small experiment budget, first compare a few
+learning rates before widening the search.
+
+### 2. Choosing a metric to optimise
+
+We'll target `validation/rmse`, which measures error in the original SIRDS count
+units. Setting `evaluation.partition=validation` keeps the test set out of the
+sweep. Use the same split seed for every run.
+
+### 3. Choosing the sampling strategy and number of runs
+
+W&B supports `grid` searches over all combinations, `random` sampling, and
+`bayes`, which uses Bayesian optimisation to choose the next configuration.
+Here we'll use `bayes` and start with a budget of ten runs.
+
+Each parameter can have a fixed list of values or a sampling distribution.
+Putting the settings together gives:
 
 ```yaml
 program: metis-train
-project: your-project
-method: random
+project: sirds-surrogates
+method: bayes
 metric:
   name: validation/rmse
   goal: minimize
+
 parameters:
+  # Fixed settings
+  dataset:
+    value: example
   model:
     value: mlp
+  split.seed:
+    value: 42
   evaluation.partition:
     value: validation
   wandb.enabled:
     value: true
   wandb.project:
-    value: your-project
+    value: sirds-surrogates
+  training.batch_size:
+    value: 64
   training.steps:
     value: 1000
+  training.schedule:
+    value: warmup_cosine
+
+  # Parameters to optimise
   training.learning_rate:
-    values: [0.0003, 0.001]
+    min: 0.0001
+    max: 0.01
+    distribution: log_uniform_values
+  training.warmup_fraction:
+    values: [0.0, 0.1, 0.2]
+  model.model_options.num_blocks:
+    values: [2, 4]
+  model.model_options.hidden_dim:
+    values: [32, 64, 128]
+
 command:
   - ${env}
   - ${program}
   - ${args_no_hyphens}
 ```
 
-Save it as `sweep.yaml`, then:
+`dataset=example` selects the SIRDS bank installed with METIS. `metis-train` is
+the installed Hydra entry point; the sweep does not need a repository checkout.
+
+Save this as `sirds-mlp-sweep.yaml` and register it with W&B:
 
 ```bash
-uv run wandb sweep --project your-project sweep.yaml
-uv run wandb agent --count 4 ENTITY/PROJECT/SWEEP_ID
+uv run wandb sweep --project sirds-surrogates sirds-mlp-sweep.yaml
 ```
 
-The agent inherits the uv project environment and launches `metis-train` from
-it. Replace the returned sweep identifier and project names with yours. Review
-the metric keys recorded by your first run before starting a larger sweep.
-Run several agents only when the allocated compute and dataset access permit it.
-See [live tracking](../package/hydra.qmd#live-tracking) for offline
-runs and the Python callback interface.
+This returns an identifier of the form `ENTITY/PROJECT/SWEEP_ID`.
+
+### 4. Launching sweep agents
+
+A W&B agent launches the training runs locally or on another machine where
+METIS and your data are available. Use the identifier returned above:
+
+```bash
+uv run wandb agent --count 10 ENTITY/PROJECT/SWEEP_ID
+```
+
+Each run saves its resolved configuration, model and evaluation report in its
+own output directory. Review the validation results in W&B, then evaluate the
+selected model on the held-out test set.
+
+For a small local grid without W&B, the same installed workflow also supports:
+
+```bash
+uv run metis train --multirun training.learning_rate=0.001,0.0003 evaluation.partition=validation
+```

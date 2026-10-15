@@ -6,6 +6,8 @@ website:
   title: "METIS"
   description: "Configurable neural network surrogate models for stochastic timeseries simulators"
   page-navigation: true
+  site-url: https://ojwatson.github.io/metis/
+  repo-url: https://github.com/OJWatson/metis
   navbar:
     left:
       - href: index.qmd
@@ -21,25 +23,12 @@ website:
     contents:
       - href: index.qmd
         text: Home
-      - section: "Use the package"
-        contents:
-          - basics/installing_metis.qmd
-          - package/quickstart.qmd
-          - package/own-bank.qmd
-          - package/data.qmd
-          - package/conditioning.qmd
-          - package/hydra.qmd
-          - package/model-choice.qmd
-          - package/evaluation.qmd
-          - package/deployment.qmd
-          - package/troubleshooting.qmd
-          - package/api.qmd
-          - package/migration.qmd
-      - section: "Training and scientific background"
+      - section: "Basics of surrogate modelling with Metis"
         contents:
           - basics/motivation.qmd
           - basics/sirds-example.qmd
           - basics/preparing-data.qmd
+          - basics/installing_metis.qmd
           - basics/hydra.qmd
           - basics/training.qmd
           - basics/saving-and-loading.qmd
@@ -62,6 +51,11 @@ website:
         contents:
           - sbi/overview.qmd
           - sbi/vi-mcmc.qmd
+      - section: "Reference"
+        contents:
+          - package/api.qmd
+          - package/troubleshooting.qmd
+          - package/migration.qmd
 
 # Author-date citations: [@key] renders inline as "(Semenova et al. 2025)" and
 # @key as "Semenova et al. (2025)", with a reference list at the end of the page.

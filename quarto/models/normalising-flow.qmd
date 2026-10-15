@@ -1,5 +1,5 @@
 ---
-title: "Normalising flow"
+title: "Normalising Flow"
 jupyter: python3
 metis-notebook: true
 format:
@@ -9,90 +9,16 @@ execute:
   eval: true
 ---
 
-The iTARFlow surrogate generates stochastic trajectories and evaluates their
-continuous probability density. This makes it useful when you need both samples
-and a surrogate likelihood for [parameter inference](../sbi/vi-mcmc.qmd).
-It currently accepts static inputs only.
+The normalising flow model is a stochastic surrogate with efficiently computable exact density.
 
-## Try it
+## When this might be a good fit
 
-This small continuous-valued example uses 40 parameter settings, four
-realisations per setting and eight time points. The response is
-$y(t)=\theta(1+\sin t)+0.3\cos t+\epsilon$, with independent
-$\epsilon\sim N(0,0.08^2)$. The known mean lets us see what the surrogate learns.
-This is a short teaching fit, not a benchmark of the model families.
 
-```{python}
-#| code-fold: true
-#| code-summary: "Create the example bank"
-import numpy as np
-import matplotlib.pyplot as plt
-from metis import SimulationDataset, Surrogate, TrainingConfig
+The normalising flow surrogate is a good option when stochasticity and/or evaluating the exact density of the surrogate is needed. Access to this density enables the surrogate to be used in parameter inference pipelines like MCMC, Variational Inference or Simulation-Based Inference (SBI).
 
-rng = np.random.default_rng(7)
-times = np.linspace(0, 2, 8)
-inputs = np.repeat(np.linspace(0.2, 1.2, 40)[:, None], 4, axis=0)
-mean = inputs[:, None, :] * (1 + np.sin(times)[None, :, None])
-mean = mean + 0.3 * np.cos(times)[None, :, None]
-outputs = mean + rng.normal(0, 0.08, mean.shape)
-bank = SimulationDataset.from_arrays(
-    inputs, outputs, input_names=["theta"], output_names=["response"], times=times,
-)
-split = bank.split(seed=42)
-```
+Architecturally it is implemented as a Transformer Autoregressive Flow (TARFlow), which is a modern normalising flow design that composes transformer blocks into an end-to-end invertible architecture. Currently it only supports static inputs. Its density is that of the fitted continuous surrogate, not the exact likelihood of the simulator.
 
-```{python}
-model = Surrogate(
-    "itarflow",
-    model_options={"channels": 32, "num_blocks": 2, "num_layers": 1, "num_heads": 2},
-).fit(
-    split.train, split.validation,
-    config=TrainingConfig(steps=300, batch_size=32, eval_every=50, seed=42),
-)
-```
-
-Generate 100 trajectories at one held-out parameter setting. The shaded band
-shows pointwise 5th–95th percentiles of these draws; it represents the fitted
-model's variability, not uncertainty in its fitted weights.
-
-```{python}
-theta = split.test.inputs[:1]
-draws = model.sample(theta, n_samples=100, seed=13)[0, :, :, 0]
-expected = theta[0, 0] * (1 + np.sin(times)) + 0.3 * np.cos(times)
-print("Draws × time points:", draws.shape)
-```
-
-```{python}
-#| code-fold: true
-#| code-summary: "Plot generated trajectories"
-#| fig-cap: "iTARFlow: short CPU fit on the synthetic continuous bank. The shaded band contains the middle 90% of surrogate draws at each time."
-low, high = np.quantile(draws, [0.05, 0.95], axis=0)
-fig, ax = plt.subplots(figsize=(6, 3.5))
-ax.fill_between(times, low, high, alpha=0.25, label="Surrogate 90% band")
-ax.plot(times, draws[:8].T, color="C0", alpha=0.15, linewidth=0.7)
-ax.plot(times, draws.mean(axis=0), color="C0", label="Surrogate sample mean")
-ax.plot(times, expected, "--", color="black", label="Known mean")
-ax.plot(times, split.test.outputs[0, :, 0], "o", color="C1", label="Held-out realisation")
-ax.set(xlabel="Time", ylabel="Response")
-ax.legend(fontsize=8)
-fig.tight_layout()
-plt.show()
-```
-
-For a real bank, assess coverage over many held-out settings using the
-[evaluation tools](../package/evaluation.qmd).
-
-The density is also available in the original output units:
-
-```{python}
-log_density = model.log_prob(theta, split.test.outputs[:1])
-print("Log density of the held-out trajectory:", log_density[0])
-```
-
-This is the fitted flow's density, not the simulator's exact likelihood or the
-probability of a particular integer count.
-
-## How it works
+## How Normalising Flows work
 
 ### Maximum likelihood via change of variables
 A Normalising Flow parametrises an invertible transformation $f_{\theta}$ from the data distribution $p_{\mathrm{data}}$ to a noise distribution $p_0$ (usually Gaussian). Once trained the network can be inverted to transform noise samples into data. This transformation also has an associated density $p_{\mathrm{model}}$ which is accessible via the change of variable formula
@@ -132,20 +58,121 @@ x^{\mathrm{input}}_{i}=(x^{\mathrm{output}}_{i}\odot\exp(\alpha_i))+\mu_i
 $$
 
 
-Flow models can become numerically unstable on some datasets. METIS does not
-apply the noise augmentation and Tweedie denoising used in the image experiments
-of @tarflow; inspect samples and held-out densities on your own bank.
+Normalising flows can have numerical difficulties on high-dimensional data.
+METIS does not apply the noise augmentation and Tweedie denoising used in the
+image experiments of @tarflow. Inspect both samples and held-out densities.
 
-## Change its size
 
-`channels` controls width, `num_blocks` the number of invertible blocks, and
-`num_layers` the transformer layers per block. `num_heads` controls attention
-heads and `num_static_tokens` controls static-input conditioning tokens.
-The default uses width 64, two blocks, two layers and four heads/static tokens.
 
-`patch_size` groups consecutive time points into one token. The default is one;
-larger values reduce the sequence length but require a divisible time grid.
+## Configuring an iTARFlow model
+
+Pass architecture options to `Surrogate("itarflow", model_options={...})`:
+
+| Option | Meaning | Default |
+|---|---|---:|
+| `channels` | Hidden dimension (width) | 64 |
+| `num_blocks` | Number of invertible flow blocks | 2 |
+| `num_layers` | Transformer layers per flow block | 2 |
+| `num_heads` | Number of attention heads | 4 |
+| `num_static_tokens` | Tokens encoding the static inputs | 4 |
+| `patch_size` | Time points grouped into one token | 1 |
+
+A larger `patch_size` shortens the sequence processed by the model and must
+divide the number of time points. Input and output dimensions are inferred
+from the bank. Through [Hydra](../basics/hydra.qmd):
 
 ```bash
 uv run metis train model=itarflow model.model_options.channels=128
 ```
+
+## Training on SIRDS
+
+We use the same [SIRDS simulations](../basics/sirds-example.qmd) and grouped
+train/validation/test split as the [training tutorial](../basics/training.qmd).
+This small CPU fit uses 1,000 optimizer steps.
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+from metis import load_example, Surrogate, TrainingConfig
+
+bank = load_example()
+split = bank.split(seed=42)
+```
+
+```{python}
+model = Surrogate(
+    "itarflow",
+    model_options={"channels": 32, "num_blocks": 2, "num_layers": 1, "num_heads": 2},
+).fit(
+    split.train, split.validation,
+    config=TrainingConfig(steps=1000, batch_size=64, eval_every=100, seed=42),
+)
+```
+
+```{python}
+#| code-fold: true
+#| code-summary: "Plot training and validation loss"
+#| fig-cap: "iTARFlow: training and validation loss for the bundled SIRDS bank."
+validation = [row for row in model.history if "validation_loss" in row]
+fig, ax = plt.subplots(figsize=(6, 3))
+ax.plot([row["step"] for row in model.history],
+        [row["train_loss"] for row in model.history], alpha=0.5, label="Training")
+ax.plot([row["step"] for row in validation],
+        [row["validation_loss"] for row in validation], "o-", label="Validation")
+ax.set(xlabel="Optimizer step", ylabel="NLL per value (up to a constant)")
+ax.legend()
+fig.tight_layout()
+plt.show()
+```
+
+Generate several trajectories for the same held-out inputs by changing the
+initial noise. The band below describes variation in surrogate samples, not
+uncertainty in fitted model weights.
+
+```{python}
+inputs = split.test.inputs[:1]
+draws = model.sample(inputs, n_samples=100, seed=13)[0]
+print("Samples × times × outputs:", draws.shape)
+print(f"Smallest generated compartment count: {draws.min():.1f}")
+```
+
+```{python}
+#| code-fold: true
+#| code-summary: "Compare surrogate samples with SIRDS simulations"
+#| fig-cap: "iTARFlow: generated trajectories and five SIRDS simulations at the first held-out parameter setting. Shading spans the pointwise 5th–95th percentiles of 100 surrogate draws, after fitting the bundled SIRDS training split."
+same_inputs = np.all(split.test.inputs == inputs[0], axis=1)
+replicates = split.test.outputs[same_inputs]
+low, high = np.quantile(draws, [0.05, 0.95], axis=0)
+fig, axes = plt.subplots(2, 2, figsize=(8, 5), sharex=True)
+for channel, ax in enumerate(axes.flat):
+    ax.fill_between(bank.times, low[:, channel], high[:, channel],
+                    color="C0", alpha=0.2, label="Surrogate 90% band")
+    ax.plot(bank.times, draws[:5, :, channel].T, color="C0", alpha=0.3)
+    ax.plot(bank.times, draws.mean(axis=0)[:, channel], color="C0", label="Surrogate mean")
+    ax.plot(bank.times, replicates[:, :, channel].T, color="0.4", alpha=0.6)
+    ax.plot(bank.times, replicates[0, :, channel], color="0.4", label="SIRDS simulations")
+    ax.set(title=bank.output_names[channel], xlabel="Time (days)", ylabel="People")
+axes[0, 0].legend(fontsize=7)
+fig.tight_layout()
+plt.show()
+```
+
+This short fit generates much wider variation than the SIRDS simulations,
+including negative counts. It is not yet a faithful SIRDS surrogate. Check
+samples and performance across the whole held-out bank, as in the
+[training tutorial](../basics/training.qmd); a density value alone does not
+establish a good fit.
+
+The flow can also evaluate the log density of a held-out trajectory, in the
+original output units:
+
+```{python}
+log_density = model.log_prob(inputs, split.test.outputs[:1])
+print("Held-out log density:", log_density[0])
+```
+
+SIRDS outputs are integer counts with a fixed population total. A continuous
+flow approximates these outputs; its density is not the probability of an
+integer trajectory. See [surrogate likelihoods](../sbi/vi-mcmc.qmd) before
+using this quantity for inference.

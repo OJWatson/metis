@@ -69,5 +69,5 @@ jobs:
       - run: uv sync --locked --all-extras
       - name: Public API and Hydra on desktop platforms
         run: uv run --locked --all-extras python -m pytest -q tests/test_surrogate_api.py tests/test_conditioning_api.py tests/test_hydra_api.py tests/test_preprocessing.py tests/test_migration.py
-      - name: Synthetic researcher workflow
+      - name: SIRDS researcher workflow
         run: uv run --locked --all-extras python examples/own_bank.py --steps 5

@@ -1,50 +1,229 @@
 ---
-title: "Train and monitor a surrogate"
+title: "Training in METIS"
+aliases:
+  - /package/quickstart.html
+  - /package/evaluation.html
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
+execute:
+  eval: true
 ---
 
-Once your data are ready, train through Python as in the
-[quickstart](../package/quickstart.qmd), or use Hydra:
+Given the [data prepared earlier](preparing-data.qmd), we can now train a
+surrogate. We will start with an MLP, then try a transformer and a flow matching
+model on exactly the same SIRDS simulations. The code and plots on this page
+are executed together, so the downloaded notebook reproduces the walkthrough.
+
+## Training an MLP
+
+Load the bundled SIRDS bank and make the same split as before. If you saved
+your own data, replace `load_example()` with `SimulationDataset.from_parquet`
+from the previous page.
+
+```{python}
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from metis import Surrogate, TrainingConfig, evaluate, load_example
+
+bank = load_example()
+split = bank.split(seed=42)
+config = TrainingConfig(steps=1000, batch_size=64, eval_every=100, seed=42)
+
+mlp = Surrogate("mlp").fit(split.train, split.validation, config=config)
+```
+
+An MLP predicts the whole output trajectory from the simulator inputs.
+`fit` handles scaling, trains the neural network and restores the weights with
+the best validation loss. Here we use 1,000 optimizer updates on the CPU, a short
+run suitable for following the tutorial.
+
+Let's compare its predictions with SIRDS realisations at three test parameter
+settings. Orange lines are simulator outputs; blue is the surrogate prediction.
+The plotting function below will be reused for all three models.
+
+```{python}
+#| code-fold: true
+#| code-summary: "Plot predictions and SIRDS realisations at the same three test settings"
+def plot_predictions(model, label):
+    groups = list(dict.fromkeys(split.test.group_keys))[::7][:3]
+    infected = bank.output_names.index("I_t")
+    fig, axes = plt.subplots(1, 3, figsize=(11, 3.4), sharex=True, sharey=True)
+    for ax, group in zip(axes, groups):
+        indices = [i for i, key in enumerate(split.test.group_keys) if key == group]
+        inputs = split.test.inputs[indices[:1]]
+        actual = split.test.outputs[indices, :, infected]
+        ax.plot(bank.times, actual.T, color="C1", alpha=0.55, linewidth=1)
+        ax.plot([], [], color="C1", label="SIRDS realisations")
+        if model.is_stochastic:
+            draws = model.sample(inputs, n_samples=30, seed=42, num_steps=30)[0, :, :, infected]
+            ax.plot(bank.times, draws.T, color="C0", alpha=0.12, linewidth=0.7)
+            prediction = draws.mean(axis=0)
+        else:
+            prediction = model.predict(inputs)[0, :, infected]
+        ax.plot(bank.times, prediction, color="C0", linewidth=2, label=label)
+        ax.set(xlabel="Time (days)", title=f"beta={group[1]:.2f}, gamma={group[2]:.2f}")
+    axes[0].set_ylabel("Infected people")
+    axes[0].legend(fontsize=8)
+    fig.tight_layout()
+    plt.show()
+```
+
+```{python}
+#| fig-cap: "MLP fitted on the 60 training settings in the bundled SIRDS bank, compared with five realisations at each of three test settings."
+plot_predictions(mlp, "MLP prediction")
+```
+
+The MLP is deterministic: repeated calls at the same inputs give the same
+trajectory. It aims to reproduce the average response, rather than the
+variation between realisations.
+
+Some held-out settings fall just beyond the ranges covered by the training
+partition. METIS warns when a prediction extrapolates; this is useful when
+checking where the simulation bank may need extending.
+
+## Training a transformer
+
+Next we'll try a transformer. All we need to change is the model choice.
+The default architecture has two layers with width 64:
+
+```{python}
+transformer = Surrogate("transformer").fit(
+    split.train, split.validation, config=config
+)
+```
+
+As before, we can view its predictions:
+
+```{python}
+#| fig-cap: "Autoregressive transformer fitted on the same 60 SIRDS training settings and evaluated at the same three test settings as the MLP."
+plot_predictions(transformer, "Transformer prediction")
+```
+
+The transformer generates the trajectory one step at a time. It is also
+deterministic. Errors can accumulate as it feeds its predictions into later
+steps, so always check complete trajectories rather than just the training
+loss. The [transformer page](../models/transformer.qmd) explains the architecture.
+
+## Training a flow matching model
+
+Again, we change the model choice and keep the data split. Flow matching is
+stochastic: we can generate several different trajectories for the same inputs.
+
+```{python}
+flow = Surrogate("flow_matching").fit(
+    split.train, split.validation, config=config
+)
+```
+
+Solid blue is the mean of 30 generated trajectories; light blue shows the
+individual draws. Orange still shows the five SIRDS realisations. These draws
+represent variability under the fitted surrogate, not uncertainty about its
+accuracy.
+
+```{python}
+#| fig-cap: "Flow matching fitted on the same 60 SIRDS training settings. Thirty surrogate draws are compared with five SIRDS realisations at each test setting."
+plot_predictions(flow, "Surrogate sample mean")
+```
+
+More training and a larger model may improve this fit. More solver steps at
+sampling time can reduce integration error, but do not replace training; see
+[flow matching](../models/flow-matching.qmd) for these settings.
+
+## Checking the fit
+
+Plots are useful, but we also need measurements across the whole test set.
+`evaluate` compares predictions with the simulations and reports errors in
+the original units. For flow matching it also evaluates the distribution of
+generated trajectories.
+
+```{python}
+reports = {
+    "MLP": evaluate(mlp, split.test),
+    "Transformer": evaluate(transformer, split.test),
+    "Flow matching": evaluate(flow, split.test, n_samples=30, num_steps=30),
+}
+comparison = pd.DataFrame([
+    {"Model": name, "Test RMSE (people)": report.metrics["rmse"],
+     "Replicate-mean RMSE (people)": report.metrics["replicate_mean_rmse"]}
+    for name, report in reports.items()
+])
+comparison.round(2)
+```
+
+These are three short tutorial fits, all trained on the same 60 settings and
+checked on the same 20 test settings. They are not a tuned comparison of model
+families. The table pools errors across all four compartments and all time
+points. RMSE against individual runs includes stochastic differences; the
+replicate-mean error compares the prediction with the average of the five
+realisations at each setting. Neither quantity establishes that a surrogate is
+good enough for your intended use.
+
+Inspect individual outputs as well. For flow matching, the coverage column is
+the fraction of observed counts inside the model's pointwise 90% predictive
+interval; it should be near 0.9 across a sufficiently large evaluation bank if
+those intervals are well calibrated. Wide intervals alone are not a good fit,
+so compare interval width and CRPS too (smaller CRPS is better).
+
+```{python}
+reports["Flow matching"].by_output
+```
+
+If predictions are poor, first check the training history. In the MLP, training
+and validation losses both measure squared error after scaling. A rising
+validation loss while training loss falls is a sign of overfitting; if both
+remain high, try more training, a different learning rate or a larger model.
+
+```{python}
+#| fig-cap: "MLP learning curve for the bundled SIRDS training and validation partitions. Test data are not used to select weights."
+history = pd.DataFrame(mlp.history)
+fig, ax = plt.subplots(figsize=(7, 3.5))
+ax.plot(history.step, history.train_loss, alpha=0.45, label="Training batch loss")
+validation = history.dropna(subset=["validation_loss"])
+ax.plot(validation.step, validation.validation_loss, "o-", label="Validation loss")
+ax.set(xlabel="Optimizer update", ylabel="Scaled mean squared error")
+ax.legend()
+fig.tight_layout()
+plt.show()
+```
+
+Use `reports["MLP"].worst_groups(3)` to find parameter settings with large
+errors. If these lie in sparsely sampled regions, more simulations there may
+help. The [`suggest_simulations` function](../package/api.qmd#other-modules)
+can select new settings from a table of candidate inputs to improve coverage; it uses distances in
+parameter space, not an estimate of model error.
+
+Also check the properties your simulator must preserve. For SIRDS, counts
+should be nonnegative, deaths should not decrease, and the four compartments
+should sum to 1,000. The neural architectures do not enforce these properties.
+The [evaluation reference](../package/api.qmd#evaluationreport) describes explicit
+constraint checks. Use validation data for tuning; if test errors influence
+changes to the surrogate or bank, reserve fresh simulations for a final check.
+
+::: {.callout-tip}
+Try changing `steps`, `learning_rate` or `batch_size` in `TrainingConfig`, or the
+architecture options in `Surrogate`. Compare validation predictions using the
+same split. Training losses from different model families have different
+meanings and should not be ranked against each other.
+:::
+
+You can run the same package workflow using Hydra, for example:
 
 ```bash
 uv run metis train model=mlp training.steps=1000 plot.enabled=true
 ```
 
-This uses the bundled example. Set `dataset=parquet` and its column names for
-your own bank, following [the Hydra guide](../package/hydra.qmd).
+See the [Hydra walkthrough](hydra.qmd) for configuration files and overrides.
+For longer runs you can also [track training with W&B](../sweeping/wandb.qmd).
 
-Each run saves the configuration, training history, model and evaluation:
-`config.yaml`, `history.json`, `model.pt` and `metrics.json`. With the `[plots]`
-extra installed, `plot.enabled=true` also saves `evaluation.png`.
+Finally, save the fitted MLP for the next part:
 
-## The main controls
-
-| Setting | What it changes |
-|---|---|
-| `training.steps` | Number of optimizer updates, not epochs |
-| `training.batch_size` | Realisations sampled for each update |
-| `training.learning_rate` | Size of the optimizer's updates |
-| `training.eval_every` | How often validation is checked |
-| `training.patience` | Validation checks without improvement before stopping |
-
-Training uses AdamW and keeps the best evaluated weights. Compare model families
-using validation prediction errors; their training losses have different meanings.
-
-## Faster or longer runs
-
-The default is CPU training in float32 with a constant learning rate. For a
-warm-up followed by cosine decay:
-
-```bash
-uv run metis train training.schedule=warmup_cosine
+```{python}
+mlp.save("sirds_surrogate.pt")
+print("Saved sirds_surrogate.pt")
 ```
 
-For a compatible CUDA setup:
-
-```bash
-uv run metis train training.device=cuda training.precision=bf16
-```
-
-See [CUDA installation](../basics/installing_metis.qmd#optional-cuda-setup),
-[multiple devices](../utils/distributed-training.qmd),
-[checkpoints](saving-and-loading.qmd) and
-[W&B tracking](../package/hydra.qmd#live-tracking) when you need them.
+Next, [load the surrogate and use it for new predictions](saving-and-loading.qmd).

@@ -1,5 +1,7 @@
 ---
 title: "Transformer"
+aliases:
+  - /package/conditioning.html
 jupyter: python3
 metis-notebook: true
 format:
@@ -8,76 +10,17 @@ format:
 execute:
   eval: true
 ---
+The autoregressive transformer model is a flexible and deterministic surrogate.
 
-The autoregressive transformer predicts a trajectory one step at a time,
-using earlier steps to help predict the next. Its predictions are deterministic.
-It supports static inputs and [observed sequences](../package/conditioning.qmd).
+## When this might be a good fit
 
-It can learn rich temporal patterns, but usually takes more computation and
-tuning than an MLP. Start by comparing both on your validation bank.
+The transformer is a great option when a deterministic surrogate suffices. Furthermore, it is more flexible than an MLP, supporting conditioning on both static inputs and sequences. The package predicts the time grid used for training. Observed sequence channels can be supplied through `observed_outputs`; their history before each prediction time is used as conditioning.
 
-## Try it
+Unfortunately, Transformer surrogates are slower to train and infer with and often require more tuning to match the performance of an MLP. Compare complete predicted trajectories on the validation bank, since next-step training loss can conceal errors that accumulate during generation.
 
-This small continuous-valued example uses 40 parameter settings, four
-realisations per setting and eight time points. The response is
-$y(t)=\theta(1+\sin t)+0.3\cos t+\epsilon$, with independent
-$\epsilon\sim N(0,0.08^2)$. The known mean lets us see what the surrogate learns.
-This is a short teaching fit, not a benchmark of the model families.
+## How transformers work
 
-```{python}
-#| code-fold: true
-#| code-summary: "Create the example bank"
-import numpy as np
-import matplotlib.pyplot as plt
-from metis import SimulationDataset, Surrogate, TrainingConfig
-
-rng = np.random.default_rng(7)
-times = np.linspace(0, 2, 8)
-inputs = np.repeat(np.linspace(0.2, 1.2, 40)[:, None], 4, axis=0)
-mean = inputs[:, None, :] * (1 + np.sin(times)[None, :, None])
-mean = mean + 0.3 * np.cos(times)[None, :, None]
-outputs = mean + rng.normal(0, 0.08, mean.shape)
-bank = SimulationDataset.from_arrays(
-    inputs, outputs, input_names=["theta"], output_names=["response"], times=times,
-)
-split = bank.split(seed=42)
-```
-
-```{python}
-model = Surrogate(
-    "transformer",
-    model_options={"n_layer": 1, "n_head": 2, "n_kv_head": 2, "n_embd": 32},
-).fit(
-    split.train, split.validation,
-    config=TrainingConfig(steps=300, batch_size=32, eval_every=50, seed=42),
-)
-```
-
-Compare the prediction with the known mean and one held-out realisation.
-
-```{python}
-theta = split.test.inputs[:1]
-prediction = model.predict(theta)[0, :, 0]
-expected = theta[0, 0] * (1 + np.sin(times)) + 0.3 * np.cos(times)
-print(f"RMSE against the known mean at theta={theta[0, 0]:.3f}: "
-      f"{np.sqrt(np.mean((prediction - expected) ** 2)):.3f}")
-```
-
-```{python}
-#| code-fold: true
-#| code-summary: "Plot the held-out prediction"
-#| fig-cap: "Transformer: short CPU fit on the synthetic continuous bank. This parameter setting was withheld from training."
-fig, ax = plt.subplots(figsize=(6, 3.5))
-ax.plot(times, split.test.outputs[0, :, 0], "o", label="Held-out realisation")
-ax.plot(times, expected, "--", color="black", label="Known mean")
-ax.plot(times, prediction, label="Transformer prediction")
-ax.set(xlabel="Time", ylabel="Response")
-ax.legend()
-fig.tight_layout()
-plt.show()
-```
-
-## How it works
+### Architectural walkthrough
 The transformer architecture is substantially more complex than an MLP's so we won't cover it in great depth here.
 
 The most important part of the Transformer architecture is the *self-attention* mechanism which enables the model to process sequence data in a highly expressive way. In an attention computation, the entries of an incoming sequence $x_1, x_2, \dots, x_n$ are given corresponding *query*, *key* and *value* vectors via projection matrices (e.g. $q_1=W_{q}x_1^T$).  These entries are collected in a $Q$ (query), $K$ (key) and $V$ (value) matrix and the transformed sequence is computed via $y=\mathrm{softmax}(\frac{QK^T}{\sqrt{d}})V$. In an autoregressive transformer this computation is restricted so that query vectors may only *attend* to key vectors from the past:
@@ -98,9 +41,9 @@ Multi-head attention: Each block is a projected sequence of query, key, or value
 :::
 ::::
 
-During training the attention computation can be done over entire sequences at once (this is a major strength of the transformer), however, during inference, the sequence is iteratively generated. Since the latest entry in the sequence still needs to attend to every entry that came before it we are forced to either repeatedly recompute prior *key* and *value* vectors or to store them in a *Key-Value Cache* (KV-Cache). The low-level architecture includes a KV-cache, but the public prediction interface currently recomputes the history.
+During training the attention computation can be done over entire sequences at once (this is a major strength of the transformer), however, during inference, the sequence is iteratively generated. Since the latest entry in the sequence still needs to attend to every entry that came before it we are forced to either repeatedly recompute prior *key* and *value* vectors or to store them in a *Key-Value Cache* (KV-Cache). The low-level architecture includes a KV-cache; the package prediction interface currently recomputes the history.
 
-METIS includes architecture options such as interleaving full self-attention with *sliding window* attention which halves the maximum size of the attention window for a computational speedup:
+In METIS we also support options like interleaving full self-attention with *sliding window* attention which halves the maximum size of the attention window for a computational speedup:
 
 
 ::: {#fig-sliding-window-attention}
@@ -117,26 +60,134 @@ We additionally support specifying fewer key-value heads (i.e. projections) than
 Grouped-query attention: Multiple query heads share each key-value head.
 :::
 
-
-
 ### Training
 
 Language transformers train with *Cross-Entropy Loss* over tokens but since our data is typically continuous, we use a next-token MSE loss.
 
-## Change its size
+## Configuring a Transformer
 
-`n_layer` controls depth and `n_embd` controls width. `n_head` and `n_kv_head`
-control attention heads; the width must divide evenly among the heads.
-The default has two layers, width 64 and four heads of each kind.
+Pass architecture options to `Surrogate("transformer", model_options={...})`:
+
+| Option | Meaning | Default |
+|---|---|---:|
+| `n_layer` | Number of transformer blocks | 2 |
+| `n_embd` | Hidden dimension (width) | 64 |
+| `n_head` | Number of query heads | 4 |
+| `n_kv_head` | Number of key/value heads | 4 |
+| `window_pattern` | Full (`L`) or shorter (`S`) attention; `SL` alternates | `L` |
+
+The width must divide evenly among query heads, with an even dimension per head;
+key/value heads must divide query heads. Dimensions and the time grid are
+inferred from the simulation bank. Optional `rope_base` and
+`in_and_out_biases` control rotary embeddings and projection biases.
+
+The same options are available through [Hydra](../basics/hydra.qmd):
 
 ```bash
 uv run metis train model=transformer model.model_options.n_layer=4 model.model_options.n_embd=128
 ```
 
-Optional `window_pattern` settings alternate full (`L`) and shorter (`S`)
-attention. For example, `+model.model_options.window_pattern=SL` adds this
-option to the preset.
+## Training on SIRDS
 
-The public API predicts the time grid used for training. Check complete
-predicted trajectories, since a low next-step training loss does not guarantee
-an accurate autonomous rollout.
+We use the same [SIRDS simulations](../basics/sirds-example.qmd) and grouped
+train/validation/test split as the [training tutorial](../basics/training.qmd).
+This small CPU fit uses 1,000 optimizer steps.
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+from metis import load_example, Surrogate, TrainingConfig
+
+bank = load_example()
+split = bank.split(seed=42)
+```
+
+```{python}
+model = Surrogate(
+    "transformer",
+    model_options={"n_layer": 2, "n_head": 4, "n_kv_head": 4, "n_embd": 64},
+).fit(
+    split.train, split.validation,
+    config=TrainingConfig(steps=1000, batch_size=64, eval_every=100, seed=42),
+)
+```
+
+```{python}
+#| code-fold: true
+#| code-summary: "Plot training and validation loss"
+#| fig-cap: "Transformer: training and validation loss for the bundled SIRDS bank."
+validation = [row for row in model.history if "validation_loss" in row]
+fig, ax = plt.subplots(figsize=(6, 3))
+ax.plot([row["step"] for row in model.history],
+        [row["train_loss"] for row in model.history], alpha=0.5, label="Training")
+ax.plot([row["step"] for row in validation],
+        [row["validation_loss"] for row in validation], "o-", label="Validation")
+ax.set(xlabel="Optimizer step", ylabel="MSE (standardized data)")
+ax.legend()
+fig.tight_layout()
+plt.show()
+```
+
+Predict an entire trajectory at the first held-out parameter setting. A
+deterministic prediction aims to capture the conditional average, whereas the
+simulator produces different realisations at the same inputs.
+
+```{python}
+inputs = split.test.inputs[:1]
+prediction = model.predict(inputs)[0]
+print("Predicted times × outputs:", prediction.shape)
+```
+
+```{python}
+#| code-fold: true
+#| code-summary: "Compare the prediction with SIRDS simulations"
+#| fig-cap: "Transformer: prediction and five SIRDS simulations at the first held-out parameter setting. The model was fitted to the training split of the bundled SIRDS bank."
+same_inputs = np.all(split.test.inputs == inputs[0], axis=1)
+replicates = split.test.outputs[same_inputs]
+fig, axes = plt.subplots(2, 2, figsize=(8, 5), sharex=True)
+for channel, ax in enumerate(axes.flat):
+    ax.plot(bank.times, replicates[:, :, channel].T, color="0.6", alpha=0.7)
+    ax.plot(bank.times, replicates[0, :, channel], color="0.6", label="SIRDS simulations")
+    ax.plot(bank.times, prediction[:, channel], color="C0", label="Transformer prediction")
+    ax.set(title=bank.output_names[channel], xlabel="Time (days)", ylabel="People")
+axes[0, 0].legend(fontsize=8)
+fig.tight_layout()
+plt.show()
+```
+
+This short fit misses the infected peak and underpredicts deaths at this
+setting, despite a falling next-step loss. Compare complete predictions over
+the whole held-out bank, as in the [training tutorial](../basics/training.qmd).
+
+## Conditioning on an observed sequence
+
+Suppose the infected trajectory is already observed and you want to predict
+the other SIRDS compartments. METIS can treat `I_t` as an input sequence and
+learn to predict `S_t`, `R_t` and `D_t`. To try this, fit a separate model using
+the `bank` and `split` created above:
+
+```python
+conditioned_model = Surrogate(
+    "transformer", observed_outputs=["I_t"],
+).fit(
+    split.train, split.validation,
+    config=TrainingConfig(steps=1000, eval_every=100, seed=42),
+)
+
+new_inputs = split.test.inputs[:1]
+infected_paths = split.test.outputs[:1, :, bank.output_names.index("I_t")]
+conditioned_prediction = conditioned_model.predict(
+    new_inputs, conditioning={"I_t": infected_paths},
+)
+prediction_by_channel = {
+    name: conditioned_prediction[:, :, channel]
+    for channel, name in enumerate(conditioned_model.output_names)
+}
+print({name: values.shape for name, values in prediction_by_channel.items()})
+```
+
+Here `infected_paths` has shape `(number_of_runs, number_of_times)` on the
+training time grid. The transformer only uses infected observations from
+before each prediction time. Choose an observed channel only if it will be
+available when using the surrogate; otherwise this changes the problem you
+are trying to solve.

@@ -1,39 +1,50 @@
 ---
-title: "Why use a surrogate?"
+title: "Motivating surrogate modelling"
 ---
 
-Scientific simulators can be expensive to run. Tasks such as parameter fitting,
-sensitivity analysis and interactive dashboards may need thousands of runs,
-while one detailed agent-based simulation can take hours or days
+## Why surrogate modelling?
+
+Many scientific disciplines rely on computational simulators which reproduce
+complex behaviours. However, these simulators are often slow and expensive to
+run, making tasks like scenario analysis, forecasting and parameter inference
+difficult or impractical. For example, a single forward simulation of a large
+COVID-19 agent-based model like JUNE can take several days
 [@chopra2023differentiableagentbasedepidemiology].
 
-A **surrogate** learns to approximate a simulator from a bank of completed
-runs. Once trained, it can produce new predictions much faster.
+Surrogate models learn to approximate these systems from simulations that have
+already been run. Once trained, they can produce new predictions much faster.
+Surrogates can be built using methods such as splines and nonparametric
+statistics; neural networks offer a flexible alternative for complex outputs,
+including whole time series.
 
-## Where METIS fits
-
-METIS provides four neural surrogate models and the tools to train, compare
-and save them. You bring simulator inputs and output trajectories; METIS helps
-you turn them into a reusable model through Python or Hydra.
-
-The usual workflow is:
-
-1. Prepare a bank covering the inputs you care about.
-2. Train on part of the bank.
-3. Compare predictions with simulations the model has not seen.
-4. Save the surrogate and use it for new inputs.
-
-A fast surrogate is useful only if it reproduces the quantities your study
-needs. Check errors, stochastic variation and physical constraints before
-using it for decisions or inference. The
-[model comparison guide](../package/model-choice.qmd) shows where to start;
-SMRS provides a broader reporting standard [@NEURIPS2025_3e1d8e89].
-
-Start with the [quickstart](../package/quickstart.qmd), or meet the
-[SIRDS simulator](sirds-example.qmd) used in the examples.
-
-::: {.callout-tip title="New to neural networks?"}
-Basic Python is enough to run the examples. For background, try
-[3Blue1Brown's introduction](https://youtu.be/aircAruvnKk) or the freely available
-[Understanding Deep Learning](https://udlbook.github.io/udlbook/) textbook.
+::: {.callout-tip}
+For an overview of the surrogate modelling process and a reporting standard
+for surrogates, see SMRS [@NEURIPS2025_3e1d8e89].
 :::
+
+## Introducing METIS
+
+METIS is a Python package for training neural surrogates of time series
+simulators. You supply a bank of simulator inputs and their output trajectories.
+METIS provides functions to load and split that bank, train different models,
+check their predictions and save a fitted surrogate for use in your own work.
+You can use these functions in a script or notebook, or configure the same
+training workflow through Hydra files and command-line overrides.
+
+The walkthrough uses one stochastic epidemic model, **SIRDS**, throughout. We
+first look at its simulations and how to organise them, then train several
+surrogates on the same bank and use the fitted models to make new predictions.
+When you bring your own simulator, the data change; the package workflow stays
+the same.
+
+::: {.callout-important}
+METIS is intended to be useful without deep learning expertise, though some
+familiarity with neural networks and their training will help. If you are new
+to the subject or feeling rusty, these resources are useful:
+
+* [But what is a neural network? (YouTube)](https://youtu.be/aircAruvnKk)
+* [Introduction to Machine Learning (Online Notes)](https://clairedavid.github.io/intro_to_ml/nn/nn_0_intro.html)
+* [Understanding Deep Learning (Textbook)](https://udlbook.github.io/udlbook/)
+:::
+
+Next, meet the [SIRDS simulator](sirds-example.qmd).

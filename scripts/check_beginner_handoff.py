@@ -47,19 +47,20 @@ def main(argv=None):
         shutil.copy2(example, project / "own_bank.py")
         run("uv", "run", "--locked", "python", "own_bank.py", "--make-bank-only")
         run("uv", "run", "--locked", "metis", "inspect-data", "own-bank/bank.parquet",
-            "--inputs", "decay", "forcing", "--outputs", "stock", "flux")
+            "--inputs", "I_0", "beta", "gamma", "omega", "mu",
+            "--outputs", "S_t", "I_t", "R_t", "D_t")
         run("uv", "run", "--locked", "python", "own_bank.py", "--csv", "own-bank/bank.csv", "--steps", "5")
         # A second process reloads without reading the bank.
         run("uv", "run", "--locked", "python", "-c",
             "from metis import Surrogate; import numpy as np; "
             "m=Surrogate.load('own-bank/model.pt'); "
-            "p=m.predict({'decay':0.2,'forcing':0.6}); "
-            "assert p.shape == (1,12,2) and np.isfinite(p).all()")
+            "p=m.predict({'I_0':0.05,'beta':0.4,'gamma':0.15,'omega':0.02,'mu':0.02}); "
+            "assert p.shape == (1,40,4) and np.isfinite(p).all()")
         # Installed Hydra exercises conditioning and strict checkpoint resume.
         hydra_arguments = [
             "dataset=parquet", "dataset.path=own-bank/bank.parquet",
-            "dataset.inputs=[decay,forcing]", "dataset.outputs=[stock,flux]",
-            "model=transformer", "model.observed_outputs=[flux]",
+            "dataset.inputs=[I_0,beta,gamma,omega,mu]", "dataset.outputs=[S_t,I_t,R_t,D_t]",
+            "model=transformer", "model.observed_outputs=[D_t]",
             "model.model_options.n_embd=16", "model.model_options.n_layer=1",
             "training.steps=2", "training.batch_size=8", "training.eval_every=1",
             "training.checkpoint_every=1", f"training.checkpoint_dir={project / 'checkpoints'}",
@@ -70,12 +71,13 @@ def main(argv=None):
             "training.resume_from=checkpoints/last.pt",
             f"hydra.run.dir={project / 'conditioned-resume'}")
         run("uv", "run", "--locked", "python", "-c",
-            "from metis import Surrogate; import numpy as np; "
+            "from metis import Surrogate, load_example; import numpy as np; "
             "a=Surrogate.load('conditioned-fit/model.pt'); "
             "b=Surrogate.load('conditioned-resume/model.pt'); "
-            "x={'decay':0.2,'forcing':0.6}; c=np.ones((1,12,1)); "
+            "data=load_example().split(seed=42).test; "
+            "x=data.inputs[:1]; c=data.outputs[:1,:,-1:]; "
             "p=a.predict(x,conditioning=c); "
-            "assert p.shape == (1,12,1) and np.isfinite(p).all(); "
+            "assert p.shape == (1,40,3) and np.isfinite(p).all(); "
             "np.testing.assert_allclose(p,b.predict(x,conditioning=c),rtol=1e-6,atol=1e-6)")
         for name in ("model.pt", "evaluation.json", "prediction.npy"):
             if not (project / "own-bank" / name).is_file():
