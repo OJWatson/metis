@@ -1,7 +1,13 @@
+import pytest
 import torch
 import torch.nn.functional as F
-from models.transformer import Transformer, TransformerConfig, Block
-from models.utils.cross_attention import CrossAttentionConfig
+from metis.models.transformer import (
+    Transformer,
+    TransformerConfig,
+    Block,
+    create_autoregressive_transformer,
+)
+from metis.models.utils.cross_attention import CrossAttentionConfig
 
 
 def test_forward_pass_shape(transformer_model, tiny_transformer_config):
@@ -182,7 +188,7 @@ def test_sliding_window_restricts_attention():
 
 def test_zero_init_residual_identity(tiny_transformer_config):
     """At init, c_proj and mlp.c_proj are zeros, so blocks should be near-identity."""
-    from models.transformer import norm
+    from metis.models.transformer import norm
 
     m = Transformer(tiny_transformer_config)
     m.init_weights()
@@ -461,96 +467,133 @@ def test_cross_attention_training():
         )
 
 
-def test_cross_attn_kv_cache_generate_matches_naive_generate():
-    cond_dim = 3
+def _activate_attention(model):
+    """Exercise every residual path instead of comparing zero projections."""
+    with torch.no_grad():
+        torch.nn.init.normal_(model.output_proj.weight, std=0.2)
+        for block in model.h:
+            torch.nn.init.normal_(block.attn.c_proj.weight, std=0.15)
+            torch.nn.init.normal_(block.mlp.c_proj.weight, std=0.15)
+            if block.has_cross_attn:
+                torch.nn.init.normal_(block.cross_attn.c_proj.weight, std=0.15)
+
+
+@pytest.mark.parametrize("prefix_len", [0, 3])
+@pytest.mark.parametrize("cross_heads", [None, 2, 4])
+@pytest.mark.parametrize("window_pattern", ["L", "S"])
+def test_nontrivial_cached_generation_matches_uncached(
+    prefix_len, cross_heads, window_pattern
+):
+    torch.manual_seed(22)
     cfg = TransformerConfig(
-        sequence_len=32,
-        x_input_dim=4,
-        static_input_dim=2,
+        sequence_len=12,
+        x_input_dim=2,
+        static_input_dim=3,
         n_layer=2,
         n_head=2,
-        n_kv_head=2,
+        n_kv_head=1,
         n_embd=16,
-        window_pattern="L",
-        cross_attn=CrossAttentionConfig(n_head=2, cond_dim=cond_dim, n_kv_head=2),
-    )
-    model = Transformer(cfg)
-    model.init_weights()
-
-    model.eval()
-
-    # Given only static and cond seq
-    static_input = torch.randn(1, cfg.static_input_dim)
-    # -1 since we will prepend ths static input
-    conditioning_sequence = torch.randn(
-        1, cfg.sequence_len - 1, cfg.cross_attn.cond_dim
-    )
-
-    naive_out = torch.cat(
-        list(
-            model.generate(
-                static_input,
-                None,
-                2,
-                use_kv_cache=False,
-                conditioning_sequence=conditioning_sequence,
-            )
+        window_pattern=window_pattern,
+        cross_attn=None
+        if cross_heads is None
+        else CrossAttentionConfig(
+            n_head=cross_heads,
+            n_kv_head=1,
+            cond_dim=3,
         ),
-        dim=1,
     )
-    cached_out = torch.cat(
+    model = Transformer(cfg).eval()
+    _activate_attention(model)
+    static = torch.randn(2, cfg.static_input_dim)
+    prefix = None if prefix_len == 0 else torch.randn(2, prefix_len, cfg.x_input_dim)
+    conditioning = None if cross_heads is None else torch.randn(2, cfg.sequence_len, 3)
+    naive = torch.cat(
+        list(model.generate(static, prefix, 8, False, conditioning)), dim=1
+    )
+    cached = torch.cat(
+        list(model.generate(static, prefix, 8, True, conditioning)), dim=1
+    )
+    assert cached.shape == (2, 8, cfg.x_input_dim)
+    torch.testing.assert_close(cached, naive, rtol=2e-5, atol=2e-5)
+    if conditioning is not None:
+        changed = conditioning.clone()
+        changed[:, prefix_len + 2 :] += 10
+        perturbed = torch.cat(
+            list(model.generate(static, prefix, 8, True, changed)), dim=1
+        )
+        # Prediction t uses observed history <t, including after cached prefill.
+        torch.testing.assert_close(perturbed[:, :3], cached[:, :3], rtol=0, atol=0)
+        assert not torch.allclose(perturbed[:, 3:], cached[:, 3:])
+
+
+def test_factory_initializes_residuals_and_defaults_are_valid():
+    model = create_autoregressive_transformer()
+    for block in model.h:
+        assert torch.count_nonzero(block.attn.c_proj.weight) == 0
+        assert torch.count_nonzero(block.mlp.c_proj.weight) == 0
+    assert torch.count_nonzero(model.output_proj.bias) == 0
+
+
+@pytest.mark.parametrize("use_cache", [False, True])
+def test_generation_zero_and_invalid_steps(transformer_model, use_cache):
+    static = torch.randn(1, transformer_model.config.static_input_dim)
+    assert (
         list(
-            model.generate(
-                static_input,
-                None,
-                2,
-                use_kv_cache=True,
-                conditioning_sequence=conditioning_sequence,
+            transformer_model.generate(
+                static, max_output_steps=0, use_kv_cache=use_cache
             )
-        ),
-        dim=1,
+        )
+        == []
     )
-
-    assert naive_out.shape == cached_out.shape, (
-        f"Shape mismatch (only static given)! Naive ({naive_out.shape}) vs KV Cache ({cached_out.shape})"
-    )
-    max_diff = (naive_out - cached_out).abs().max().item()
-    assert max_diff < 1e-5, (
-        f"Outputs diverge (only static given)! max diff = {max_diff}"
-    )
-
-    # Given static and some x
-    x = torch.randn(1, 4, cfg.x_input_dim)
-
-    naive_out = torch.cat(
-        list(
-            model.generate(
-                static_input,
-                x,
-                2,
-                use_kv_cache=False,
-                conditioning_sequence=conditioning_sequence,
+    for invalid in (-1, 1.5, True):
+        with pytest.raises(ValueError, match="nonnegative integer"):
+            list(
+                transformer_model.generate(
+                    static, max_output_steps=invalid, use_kv_cache=use_cache
+                )
             )
-        ),
-        dim=1,
+
+
+def test_conditioned_loss_accepts_complete_observed_trajectory():
+    torch.manual_seed(9)
+    model = Transformer(
+        TransformerConfig(
+            sequence_len=6,
+            x_input_dim=1,
+            static_input_dim=2,
+            n_layer=2,
+            n_head=2,
+            n_kv_head=2,
+            n_embd=16,
+            cross_attn=CrossAttentionConfig(n_head=4, n_kv_head=2, cond_dim=1),
+        )
     )
-    cached_out = torch.cat(
-        list(
-            model.generate(
-                static_input,
-                x,
-                2,
-                use_kv_cache=True,
-                conditioning_sequence=conditioning_sequence,
-            )
-        ),
-        dim=1,
+    targets = torch.randn(3, 6, 2)
+    static = torch.randn(3, 2)
+    loss = model.compute_loss(
+        static, targets[:, :-1], targets, pred_and_obs_idx=([0], [1])
+    )
+    expected = model(
+        targets[:, :-1, :1], static, targets=targets[:, :, :1], cond=targets[:, :-1, 1:]
+    )
+    torch.testing.assert_close(loss, expected)
+    loss.backward()
+    assert model.num_scaling_params()["total"] == sum(
+        p.numel() for p in model.parameters()
     )
 
-    assert naive_out.shape == cached_out.shape, (
-        f"Shape mismatch (static and some x given)! Naive ({naive_out.shape}) vs KV Cache ({cached_out.shape})"
-    )
-    max_diff = (naive_out - cached_out).abs().max().item()
-    assert max_diff < 1e-5, (
-        f"Outputs diverge (static and some x given)! max diff = {max_diff}"
-    )
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"n_head": 3},
+        {"n_embd": 24, "n_head": 8},
+        {"n_layer": 0},
+        {"window_pattern": ""},
+        {"n_kv_head": 3},
+        {"sequence_len": 0},
+    ],
+)
+def test_invalid_transformer_config(kwargs):
+    with pytest.raises(ValueError):
+        TransformerConfig(**kwargs)

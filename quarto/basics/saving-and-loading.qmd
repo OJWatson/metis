@@ -3,7 +3,7 @@
 Once trained, we'd like to deploy our models in some downstream applications. We may also want to resume a training run that was interrupted (e.g. due to a hardware issue) or simply continue training if model performance was still improving. 
 
 ## Checkpointing
-Both of these use cases are addressed via Metis's 'checkpointing' system. The checkpointer saves the model weights, current training step, pseudo-random generator states and the optimiser (amongst other things) so that training may be resumed seamlessly.
+Both of these use cases are addressed via Metis's 'checkpointing' system. The checkpointer saves the model weights, current training step, the optimiser and resolved configuration (amongst other things) so that training can be resumed. Deterministic runs derive random seeds from the step; reproducible continuation requires the same seed, world size, batch size and learning-rate schedule.
 
 To enable checkpointing in your run simply set how often you'd like a checkpoint saved (number of steps)
 ```yaml

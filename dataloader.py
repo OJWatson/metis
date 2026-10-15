@@ -1,5 +1,6 @@
 import polars as pl
 import torch
+import numpy as np
 
 from dataclasses import dataclass
 from colorama import Fore, init
@@ -117,27 +118,9 @@ def prepare_splits(
         df = left_truncate_and_recalculate_static_inputs(
             df, trunc_until, input_col_to_source_col_dict
         )
-    ######### Calculate dataset mean and stds ####################
-
-    df_sorted = df.sort(["rep", "param_index", "t"])
-    T = num_timesteps
-    n_cols_in = len(surrogate_input_cols)
-    n_cols_out = len(output_cols)
-    n_samples = len(df_sorted) // T
-    inputs_np = df_sorted.select(surrogate_input_cols).cast(pl.Float32).to_numpy()
-    outputs_np = df_sorted.select(output_cols).cast(pl.Float32).to_numpy()
-    inputs_tensor = (
-        torch.from_numpy(inputs_np).view(n_samples, T, n_cols_in).permute(0, 2, 1)
-    )
-    outputs_tensor = (
-        torch.from_numpy(outputs_np).view(n_samples, T, n_cols_out).permute(0, 2, 1)
-    )
-
-    input_means = inputs_tensor.mean((0))
-    input_stds = inputs_tensor.std((0))
-
-    output_means = outputs_tensor.mean((0))
-    output_stds = outputs_tensor.std((0))
+    # Validate before splitting: unequal runs can otherwise reshape into mixed
+    # trajectories even when their total row count is divisible by T.
+    _validate_trajectories(df, surrogate_input_cols, output_cols, num_timesteps)
 
     ######### Split data ####################
 
@@ -145,19 +128,95 @@ def prepare_splits(
     # with the same inputs in both train and val
     # .unique() returns hash-order (non-deterministic), so sort first for reproducible shuffling
     unique_param_indices = df["param_index"].unique().sort().shuffle(seed)
-    n_val = int(len(unique_param_indices) * val_prop)
+    if not np.isfinite(val_prop) or not 0 < val_prop < 1:
+        raise ValueError("val_prop must be strictly between zero and one.")
+    if len(unique_param_indices) < 2:
+        raise ValueError(
+            "Training and validation require at least two distinct parameter groups."
+        )
+    n_val = min(
+        len(unique_param_indices) - 1, max(1, int(len(unique_param_indices) * val_prop))
+    )
     val_indices = unique_param_indices.head(n_val)
     train_indices = unique_param_indices.tail(-n_val)
     # Need to convert indices to list so that polars knows we are performing a set membership check
     train_df = df.filter(pl.col("param_index").is_in(train_indices.to_list()))
     val_df = df.filter(pl.col("param_index").is_in(val_indices.to_list()))
 
+    # Fit preprocessing on training realizations only. Validation must not
+    # influence either the scale or the mean used by the fitted model.
+    _, _, input_stats, output_stats = make_tensors(
+        train_df, surrogate_input_cols, output_cols, num_timesteps, z_score=False
+    )
+
     return (
         train_df,
         val_df,
-        DatasetMeansAndStds(input_means, input_stds),
-        DatasetMeansAndStds(output_means, output_stds),
+        input_stats,
+        output_stats,
     )
+
+
+def _validate_trajectories(df, surrogate_input_cols, output_cols, num_timesteps):
+    """Validate each legacy (param_index, rep) run before tensor reshaping."""
+    if not isinstance(num_timesteps, (int, np.integer)) or num_timesteps < 1:
+        raise ValueError("num_timesteps must be a positive integer.")
+    if not surrogate_input_cols or not output_cols:
+        raise ValueError("Specify at least one input and one output column.")
+    if len(set(surrogate_input_cols)) != len(surrogate_input_cols) or len(
+        set(output_cols)
+    ) != len(output_cols):
+        raise ValueError("Input and output column lists must not contain duplicates.")
+    if set(surrogate_input_cols) & set(output_cols):
+        raise ValueError("Input and output columns must be distinct.")
+    required = list(
+        dict.fromkeys(["param_index", "rep", "t", *surrogate_input_cols, *output_cols])
+    )
+    missing = sorted(set(required) - set(df.columns))
+    if missing:
+        raise ValueError(f"Simulation table is missing required columns: {missing}.")
+    if not df.height:
+        raise ValueError("Cannot create tensors from an empty simulation table.")
+    for name in required:
+        if df[name].null_count():
+            raise ValueError(f"Column {name!r} contains missing values.")
+    for name in ["t", *surrogate_input_cols, *output_cols]:
+        values = df[name].to_numpy()
+        if values.dtype.kind not in "biuf" or not np.isfinite(values).all():
+            raise ValueError(f"Column {name!r} must contain finite numeric values.")
+    runs = df.group_by(["param_index", "rep"]).agg(
+        pl.len().alias("__length"),
+        pl.col("t").n_unique().alias("__unique_times"),
+        *[
+            pl.col(c).n_unique().alias(f"__static_{i}")
+            for i, c in enumerate(surrogate_input_cols)
+        ],
+    )
+    if runs.filter(
+        (pl.col("__length") != num_timesteps)
+        | (pl.col("__unique_times") != num_timesteps)
+    ).height:
+        raise ValueError(
+            f"Every (param_index, rep) realization must contain exactly {num_timesteps} "
+            "distinct timepoints; found duplicate observations or unequal trajectory lengths."
+        )
+    for i, name in enumerate(surrogate_input_cols):
+        if runs.filter(pl.col(f"__static_{i}") != 1).height:
+            raise ValueError(
+                f"Input {name!r} varies over time within a realization; inputs must be static."
+            )
+    grid = (
+        df.sort(["rep", "param_index", "t"])["t"].to_numpy().reshape(-1, num_timesteps)
+    )
+    if not np.all(grid == grid[0]):
+        raise ValueError("Every realization must use the same complete time grid.")
+
+
+def _safe_stds(tensor):
+    # Preserve legacy sample-standard-deviation semantics when N > 1.
+    # A single realization and fixed quantities have a deterministic unit scale.
+    stds = tensor.std(dim=0, correction=1 if tensor.size(0) > 1 else 0)
+    return torch.where(stds == 0, torch.ones_like(stds), stds)
 
 
 def make_tensors(
@@ -169,6 +228,7 @@ def make_tensors(
     z_score=True,
     means_and_stds=None,
 ):
+    _validate_trajectories(df, surrogate_input_cols, output_cols, num_timesteps)
     # 1. Global sort ensures data is contiguous for reshaping
     df_sorted = df.sort(["rep", "param_index", "t"])
 
@@ -183,6 +243,8 @@ def make_tensors(
     # as a single block.
     inputs_np = df_sorted.select(surrogate_input_cols).cast(pl.Float32).to_numpy()
     outputs_np = df_sorted.select(output_cols).cast(pl.Float32).to_numpy()
+    if not np.isfinite(inputs_np).all() or not np.isfinite(outputs_np).all():
+        raise ValueError("Simulation values exceed the supported float32 range.")
 
     # 4. Reshape and Permute
     # Current shape: (N_samples * T, Channels)
@@ -198,18 +260,38 @@ def make_tensors(
     # TODO: Test that this behaviour works correctly
     if means_and_stds is None:
         input_means = inputs_tensor.mean((0))
-        input_stds = inputs_tensor.std((0))
+        input_stds = _safe_stds(inputs_tensor)
 
         output_means = outputs_tensor.mean((0))
-        output_stds = outputs_tensor.std((0))
+        output_stds = _safe_stds(outputs_tensor)
     else:
-        assert isinstance(means_and_stds, tuple)
+        if not isinstance(means_and_stds, tuple) or len(means_and_stds) != 2:
+            raise ValueError(
+                "means_and_stds must contain fitted input and output statistics."
+            )
         input_means_and_stds, output_means_and_stds = means_and_stds
         input_means = input_means_and_stds.means
         input_stds = input_means_and_stds.stds
 
         output_means = output_means_and_stds.means
         output_stds = output_means_and_stds.stds
+
+    for means, stds, expected in (
+        (input_means, input_stds, (n_cols_in, T)),
+        (output_means, output_stds, (n_cols_out, T)),
+    ):
+        if means.shape != expected or stds.shape != expected:
+            raise ValueError(
+                "Normalization statistics do not match the dataset channels and time grid."
+            )
+        if (
+            not torch.isfinite(means).all()
+            or not torch.isfinite(stds).all()
+            or (stds <= 0).any()
+        ):
+            raise ValueError(
+                "Normalization statistics must be finite with strictly positive scales."
+            )
 
     if z_score:
         inputs_tensor = (inputs_tensor - input_means[None, ...]) / input_stds[None, ...]

@@ -1,0 +1,2 @@
+# A packaged SIRDS subset for tutorials and installation checks.
+_target_: metis.load_example

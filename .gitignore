@@ -8,3 +8,12 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Training runs and development caches
+outputs/
+multirun/
+.pytest_cache/
+.ruff_cache/
+
+# Local review reports and research results stay in the canonical checkout.
+/reports/

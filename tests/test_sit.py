@@ -1,6 +1,7 @@
+import pytest
 import torch
-from models.sit import SiT, SiTConfig, InterpolantTransformer, LinearInterpolant
-from models.utils.cross_attention import CrossAttention, CrossAttentionConfig
+from metis.models.sit import SiT, SiTConfig, InterpolantTransformer, LinearInterpolant
+from metis.models.utils.cross_attention import CrossAttention, CrossAttentionConfig
 
 
 def make_tiny_config():
@@ -248,3 +249,100 @@ def test_cross_attention_training():
         p.grad is not None and torch.any(p.grad != 0) for p in model.parameters()
     )
     assert has_grad, "At least one parameter should have non-zero gradients"
+
+
+@pytest.mark.parametrize("cross_heads", [2, 8])
+def test_cross_attention_supports_different_head_dimensions(cross_heads):
+    cfg = SiTConfig(
+        sequence_len=8,
+        data_dim=2,
+        cond_dim=3,
+        n_blocks=2,
+        n_head=4,
+        n_kv_head=2,
+        embd_dim=32,
+        cond_dropout_prob=0,
+        cross_attn=CrossAttentionConfig(n_head=cross_heads, n_kv_head=2, cond_dim=1),
+    )
+    model = InterpolantTransformer(cfg, LinearInterpolant())
+    x = torch.randn(2, 8, 2)
+    observed = torch.randn(2, 8, 1)
+    y = torch.randn(2, 3)
+    with torch.no_grad():
+        torch.nn.init.normal_(model.sit.final_layer.linear.weight, std=0.1)
+    out = model.v_t(x, torch.rand(2), y, observed)
+    assert out.shape == x.shape
+    out.square().mean().backward()
+    assert torch.any(model.sit.blocks[0].cross_attn.c_proj.weight.grad != 0)
+    generated, original = model.sample(
+        x, y, num_steps=2, method="heun", cond_seq=observed
+    )
+    assert generated.shape == x.shape
+    assert torch.isfinite(generated).all()
+
+
+@pytest.mark.parametrize("num_steps", [0, -1, 1.5, True])
+def test_invalid_sampling_steps(num_steps):
+    cfg = make_tiny_config()
+    model = InterpolantTransformer(cfg, LinearInterpolant())
+    with pytest.raises(ValueError, match="positive integer"):
+        model.sample(
+            torch.randn(1, cfg.sequence_len, cfg.data_dim),
+            torch.randn(1, cfg.cond_dim),
+            num_steps=num_steps,
+        )
+
+
+def test_unknown_solver_is_rejected():
+    cfg = make_tiny_config()
+    model = InterpolantTransformer(cfg, LinearInterpolant())
+    with pytest.raises(ValueError, match="Solver"):
+        model.sample(
+            torch.randn(1, cfg.sequence_len, cfg.data_dim),
+            torch.randn(1, cfg.cond_dim),
+            method="typo",
+        )
+
+
+def test_heun_corrects_final_step():
+    cfg = make_tiny_config()
+    model = InterpolantTransformer(cfg, LinearInterpolant())
+    # For x'=x, one unit Euler step gives 2x; Heun gives 2.5x.
+    model.v_t = lambda x, t, y, cond_seq=None: x
+    initial = torch.ones(1, cfg.sequence_len, cfg.data_dim)
+    y = torch.zeros(1, cfg.cond_dim)
+    euler, _ = model.sample(initial, y, num_steps=1, method="euler")
+    heun, original = model.sample(initial, y, num_steps=1, method="heun")
+    torch.testing.assert_close(euler, 2 * initial)
+    torch.testing.assert_close(heun, 2.5 * initial)
+    torch.testing.assert_close(original, initial)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"n_head": 3},
+        {"embd_dim": 24, "n_head": 8},
+        {"n_blocks": 0},
+        {"n_kv_head": 3},
+        {"sequence_len": 0},
+        {"cond_dropout_prob": 1.1},
+    ],
+)
+def test_invalid_sit_config(kwargs):
+    with pytest.raises(ValueError):
+        SiTConfig(**kwargs)
+
+
+def test_sampling_rejects_wrong_sequence_shape():
+    cfg = make_tiny_config()
+    model = InterpolantTransformer(cfg, LinearInterpolant())
+    with pytest.raises(ValueError, match="x_0 must have shape"):
+        model.sample(
+            torch.zeros(2, cfg.sequence_len - 1, cfg.data_dim),
+            torch.zeros(2, cfg.cond_dim),
+        )
+    with pytest.raises(ValueError, match="y must have shape"):
+        model.sample(
+            torch.zeros(2, cfg.sequence_len, cfg.data_dim), torch.zeros(1, cfg.cond_dim)
+        )

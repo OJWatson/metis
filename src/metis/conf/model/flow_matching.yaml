@@ -1,0 +1,9 @@
+_target_: metis.Surrogate
+model: flow_matching
+model_options:
+  n_blocks: 2
+  n_head: 4
+  n_kv_head: 4
+  embd_dim: 64
+  cond_dropout_prob: 0.0
+  interpolant: linear

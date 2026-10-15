@@ -3,8 +3,9 @@ import math
 import pytest
 import torch
 
-from models.itarflow import (
+from metis.models.itarflow import (
     ImprovedTARFlow,
+    iTarFlowConfig,
     apply_rotary_pos_emb,
     create_itarflow,
     precompute_rope_freqs,
@@ -256,24 +257,65 @@ def test_single_batch_overfit(itarflow_model, tiny_itarflow_config):
         loss.backward()
         optimizer.step()
 
-    # Lower bound of MLE objective is the entropy of the data distribution
-    # https://en.wikipedia.org/wiki/Multivariate_normal_distribution
-    # Hence, overfitting to finite samples would require the nll to be lower than the entropy of the data generating
-    # distribution
-
-    # Since our data distribution is a multivariate gaussian, the entropy is:
-    # H = n/2* log (2*pi*e) + 1/2 log det(\sigma)
-
-    entropy_of_data_distribution = (
-        (cfg.num_timesteps * cfg.out_channels) / 2
-    ) * math.log(2 * math.pi * math.e) + (1 / 2) * math.log(
-        cfg.num_timesteps * cfg.out_channels * 9
-    )
+    # Population expected NLL is bounded below by differential entropy. An
+    # empirical training NLL can fall below it by overfitting finite samples.
+    # For covariance 9 I_D, det(covariance)=9**D, not 9*D.
+    dimensions = cfg.num_timesteps * cfg.out_channels
+    entropy_of_data_distribution = dimensions / 2 * math.log(2 * math.pi * math.e * 9)
     final_loss = loss.item()
 
-    # Now we re-scale our final loss since tarflow mean reduces along the dims
-    nll = final_loss * (cfg.num_timesteps * cfg.out_channels)
+    # Training omits the Gaussian constant and averages over dimensions.
+    nll = (final_loss + 0.5 * math.log(2 * math.pi)) * dimensions
 
     assert nll < entropy_of_data_distribution, (
         "NLL is not lower than data distribution entropy, model hasn't overfit"
     )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"num_timesteps": 0},
+        {"patch_size": 3},
+        {"num_blocks": 0},
+        {"channels": 12, "num_heads": 4},
+        {"num_static_tokens": 0},
+    ],
+)
+def test_invalid_dimensions_are_rejected(kwargs):
+    with pytest.raises(ValueError):
+        iTarFlowConfig(**kwargs)
+
+
+def test_wrong_trajectory_length_is_rejected(itarflow_model, tiny_itarflow_config):
+    cfg = tiny_itarflow_config
+    with pytest.raises(ValueError, match="trajectory tensor"):
+        itarflow_model(
+            torch.randn(2, cfg.num_timesteps - 1, cfg.out_channels),
+            torch.randn(2, cfg.static_in),
+        )
+
+
+def test_single_patch_reverse_is_identity_with_zero_logdet():
+    model = ImprovedTARFlow(
+        iTarFlowConfig(
+            num_timesteps=2,
+            patch_size=2,
+            out_channels=1,
+            channels=8,
+            num_heads=2,
+            num_layers=1,
+            num_blocks=2,
+            static_in=2,
+            num_static_tokens=1,
+        )
+    )
+    _randomize_flow(model)
+    x = torch.randn(3, 2, 1)
+    static = torch.randn(3, 2)
+    with torch.no_grad():
+        z, forward_logdet = model(x, static)
+        reconstructed, reverse_logdet = model.reverse(z, static)
+    torch.testing.assert_close(reconstructed, x)
+    torch.testing.assert_close(forward_logdet, torch.zeros(3))
+    torch.testing.assert_close(reverse_logdet, torch.zeros(3))

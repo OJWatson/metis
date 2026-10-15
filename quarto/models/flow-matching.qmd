@@ -54,7 +54,7 @@ Metis's implementation is designed to support different kinds of *Stochastic Int
 * `interpolant`: Currently only 'flow-matching' supported.
 * `num_steps`: Number of ODE solver steps for evaluations, does not impact training.
 * `solver`: ODE solver, currently only 'heun' (second-order) and 'euler' (first-order) are supported.
-* `multi_mode`: Whether to generate multiple samples from the median of the parameter group ('median' option) or to generate multiple samples for each entry in the parameter group ('entire_parameter_group'). This second option only makes sense for models like HRP and Magenta where realisations within the same parameter group can have different static inputs.
+* `multi_mode`: Whether to generate multiple samples from the median of the parameter group ('median' option) or to generate multiple samples for each entry in the parameter group ('entire_param_group'). This second option only makes sense for models like HRP and Magenta where realisations within the same parameter group can have different static inputs.
 * `sit`:
     * `sequence_len`: Number of timesteps in the data sequence.
     * `data_dim`: Number of variables per datapoint.
@@ -63,7 +63,7 @@ Metis's implementation is designed to support different kinds of *Stochastic Int
     * `n_head`: Number of query heads in attention layers.
     * `n_kv_head`: Number of key-value heads in attention layers.
     * `qkv_bias`: Whether the projection matrices in the self-attention module use biases.
-    * `emdb_dim`: Hidden dimension of the network
+    * `embd_dim`: Hidden dimension of the network
     * `cond_dropout_prob`: Currently unused - but could be used to enable [classifier-free guidance](https://arxiv.org/abs/2207.12598)
     * `in_and_out_biases`: Whether the input and out projections use learnable biases.
     * `cross_attn`: The cross attention config for sequence conditioning, can be `None`.
@@ -72,7 +72,7 @@ The `sequence_len`, `data_dim` and `cond_dim` are all automatically configured b
 
 
 | Config | `n_blocks` | `n_head` | `n_kv_head` | `embd_dim` 
-|---|---:|---:|---:|---:|---|
+|---|---:|---:|---:|---:|
 | `flow_matching_small` | 6 | 4 | 4 | 64 |
 | `flow_matching_default` | 12 | 8 | 8 | 64 |
 | `flow_matching_large` | 16 | 16 | 16 | 128 |

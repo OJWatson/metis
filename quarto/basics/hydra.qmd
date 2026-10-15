@@ -125,6 +125,7 @@ output_variables:
 
 num_timesteps: 200
 path: examples/sirds_data.parquet
+reps_for_comparison_plot: 5
 
 # advanced options we'll ignore for now
 trunc_until: null

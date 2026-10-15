@@ -28,12 +28,12 @@ from dataloader import (
     make_tensors,
     prepare_splits,
 )
-from models.itarflow import ImprovedTARFlow, iTarFlowConfig
-from models.mlp import ResidualMLP, ResidualMLPConfig
-from models.sit import InterpolantTransformer, InterpolantTransformerConfig
-from models.transformer import Transformer, TransformerConfig
-from models.utils.deterministic import make_deterministic
-from models.utils.precision import PrecisionMode, configure_precision, training_autocast
+from metis.models.itarflow import ImprovedTARFlow, iTarFlowConfig
+from metis.models.mlp import ResidualMLP, ResidualMLPConfig
+from metis.models.sit import InterpolantTransformer, InterpolantTransformerConfig
+from metis.models.transformer import Transformer, TransformerConfig
+from metis.models.utils.deterministic import make_deterministic
+from metis.models.utils.precision import PrecisionMode, configure_precision, training_autocast
 
 
 @dataclass
@@ -226,8 +226,13 @@ def generate_comparison_plot(
     seed: int = 0,
     device: str = "cuda",
 ):
+    if len(candidates) == 0:
+        raise ValueError("No validation groups have the requested replicate count; check reps_for_comparison_plot")
     if subsample is not None:
+        if not isinstance(subsample, int) or subsample < 1 or subsample > len(candidates):
+            raise ValueError(f"sampling.subsample must be between 1 and {len(candidates)} eligible groups")
         candidates = candidates.sample(n=subsample, seed=seed)
+    model.eval()
     selected_df = df.filter(pl.col("param_index").is_in(candidates["param_index"]))
 
     # TODO: Ensure equal number of reps
@@ -507,6 +512,7 @@ def generate_comparison_plot(
         generated.shape[0],
         n_plot,
         figsize=(n_plot * 8, 5 * generated.shape[0]),
+        squeeze=False,
     )
     if keep_greater_than_zero:
         generated = np.maximum(0, generated)
@@ -558,6 +564,7 @@ def generate_comparison_plot(
     fig.tight_layout()
     assert cfg.sampling.samples_name is not None
     fig.savefig(cfg.sampling.samples_name)
+    plt.close(fig)
 
 
 RENDEZVOUS_FILENAME = ".rendezvous"  # Workers meet through this file in the output dir
@@ -615,6 +622,8 @@ def run_training(
             v for v in cfg.dataset.output_variables if v not in excluded
         ]
     if "residual_mlp" in cfg.model._target_:
+        if obs_vars:
+            raise ValueError("MLP cannot condition on observed sequences; choose a transformer or flow-matching model")
         cfg.model.input_dim = len(cfg.dataset.surrogate_input_variables)
         cfg.model.output_dim = cfg.dataset.num_timesteps * len(
             cfg.dataset.output_variables
@@ -964,7 +973,7 @@ def run_training(
     if cfg.logger.use_wandb:
         assert wandb.run is not None
         wandb.run.summary["final_val_loss"] = final_val_loss
-        wandb.finish(quiet=True)
+        wandb.finish()
     return final_val_loss
 
 

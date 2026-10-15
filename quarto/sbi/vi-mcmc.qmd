@@ -33,7 +33,7 @@ from IPython.display import Image
 from omegaconf import OmegaConf
 
 from dataloader import prepare_splits
-from examples.sirds_simulator import simulate_sirds
+from metis.datasets.sirds import simulate_sirds
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 torch.manual_seed(42)

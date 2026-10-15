@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from models.mlp import ResidualMLP, ResidualMLPConfig
+from metis.models.mlp import ResidualMLP, ResidualMLPConfig
 
 
 def test_forward_pass_shape(mlp_model, tiny_mlp_config):

@@ -7,7 +7,7 @@ import torch.multiprocessing as mp
 from omegaconf import OmegaConf
 from torch.nn.parallel import DistributedDataParallel
 
-from models.mlp import ResidualMLP, ResidualMLPConfig
+from metis.models.mlp import ResidualMLP, ResidualMLPConfig
 from train import (
     DistributedRuntime,
     TrainingLoss,

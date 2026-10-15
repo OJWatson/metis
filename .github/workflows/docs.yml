@@ -1,0 +1,59 @@
+name: Documentation
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: documentation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: "1.10.19"
+      - name: Install isolated diagram renderer
+        run: quarto install chrome-headless-shell --no-prompt
+      - name: Install documentation environment
+        run: |
+          python -m pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install ".[docs]"
+      - name: Execute installed-package beginner workflow
+        run: python examples/package_quickstart.py --steps 20 --output /tmp/metis-doc-example
+      - name: Render site
+        run: quarto render quarto --to all --no-execute
+      - name: Check local documentation links and assets
+        run: python scripts/check_site_links.py quarto/_site
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: quarto/_site
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/configure-pages@v5
+      - uses: actions/deploy-pages@v4
+        id: deployment

@@ -1,0 +1,40 @@
+---
+title: "Public API reference"
+---
+
+All objects below are exported from `metis`. Python docstrings describe their
+arguments and exceptions. Hydra constructs these same objects.
+
+| Object or method | Contract |
+|---|---|
+| `SimulationDataset.from_parquet(path, inputs=..., outputs=..., groups=None, time="t", replicate="rep")` | Read and validate complete numeric trajectories |
+| `SimulationDataset.from_frame(frame, ...)` | Equivalent input from a pandas or Polars frame |
+| `SimulationDataset.from_arrays(inputs, outputs, input_names=..., output_names=..., ...)` | Numeric arrays with shapes `(N,P)` and `(N,T,C)` |
+| `bank.split(validation_fraction=.2, test_fraction=.2, seed=42)` | Disjoint scenario partitions; zero fractions disable optional partitions |
+| `DatasetSplit.from_datasets(train, validation=None, test=None)` | Validate supplied partitions and reject overlap |
+| `Surrogate(model="mlp", model_options=None)` | Select family and optional architecture overrides; data dimensions inferred |
+| `surrogate.fit(train, validation=None, config=TrainingConfig(...), on_progress=None)` | Fit training-only scales and weights, restore best validation weights; optional callback receives a copy of each progress record |
+| `surrogate.predict(inputs, ...)` | Original-unit deterministic prediction `(B,T,C)`; stochastic mean requires explicit `n_samples` |
+| `surrogate.sample(inputs, n_samples=100, seed=42, num_steps=50, solver="heun")` | Stochastic samples `(B,S,T,C)`; ODE settings apply to flow matching |
+| `surrogate.evaluate(bank, ...)` | `EvaluationReport` with original-unit metrics and provenance |
+| `surrogate.save(path)` / `Surrogate.load(path, device="cpu")` | Complete versioned artifact, independent of source data |
+| `surrogate.log_prob(inputs, outputs)` | iTARFlow continuous log density, original units |
+| `surrogate.log_prob_tensor(inputs, outputs)` | Differentiable iTARFlow log density |
+| `assess_coverage(training, candidates)` | Marginal range flags and distance to existing inputs |
+| `suggest_simulations(training, candidates, n=10)` | Greedy coverage suggestions over supplied candidates |
+| `load_example()` | Bundled 100-group, 40-timepoint SIRDS subset |
+
+`TrainingConfig` defaults: steps=500, batch_size=64, learning_rate=0.001,
+weight_decay=0.001, seed=42, device="cpu", eval_every=50, patience=None.
+The package training loop uses constant-learning-rate AdamW and optional
+validation patience. This is distinct from the historical source trainer's
+warm-up/cosine schedule. Configure and report the workflow actually used.
+
+The public pipeline supports CPU and CUDA in float32. It does not automatically
+select precision, compile the model, run distributed training, enforce physical
+constraints or choose a model family. Advanced model classes remain importable
+from `metis.models`; historical CUDA/DDP recipes remain available in the checkout.
+
+Optional tracking is available as `from metis.tracking import WandbTracker`.
+Use its context manager and pass `on_progress=tracker.log_training` to `fit`.
+The core library never requires a W&B account; tracking can also run offline.

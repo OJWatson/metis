@@ -1,0 +1,73 @@
+---
+title: "Choose a model and diagnose training"
+---
+
+Choose the quantity you need to predict before choosing the architecture. METIS
+does not automatically decide which scientific errors are acceptable.
+
+## Start with the intended use
+
+| Intended use | First comparison | What to check |
+|---|---|---|
+| A dashboard showing the expected trajectory | Training-bank mean versus `mlp` | Original-unit error on new parameter settings and the outcomes users will inspect |
+| A deterministic trajectory with sequential structure | `mlp` versus `transformer` | Fully generated trajectories; teacher-forced loss can hide accumulated rollout errors |
+| A dashboard or decision calculation requiring random realizations | `flow_matching` or `itarflow` | CRPS, predictive coverage and width, temporal dependence, rare outcomes and physical constraints |
+| Fitting parameters using a learned continuous likelihood | `itarflow` | Held-out density, generative checks and the explicit observation/discrepancy model needed by the fitting problem |
+
+A deterministic model cannot reproduce variation between repeated simulator
+runs at the same inputs. A stochastic model can generate variation but does not
+thereby quantify uncertainty about its own accuracy. A short neural training run
+can also perform worse than the simple training-bank mean.
+
+## Compare using validation, then test once
+
+Create the grouped split once and reuse it. Keep the test partition aside while
+choosing architecture, training duration and learning rate. For example:
+
+```python
+from metis import Surrogate, TrainingConfig
+
+comparisons = []
+for family in ("mlp", "transformer"):
+    candidate = Surrogate(family).fit(
+        split.train, split.validation,
+        config=TrainingConfig(steps=1000, seed=42),
+    )
+    validation = candidate.evaluate(split.validation)
+    comparisons.append((family, validation.metrics, validation.by_output))
+```
+
+Evaluating validation emits a provenance warning because these groups helped
+choose weights. This is appropriate for tuning; it is not an independent test.
+Inspect per-output results, since a large numerical scale can dominate an
+aggregate RMSE. Define your decision rule and acceptable error in advance where
+possible, then evaluate the selected model on `split.test`. If the test results
+drive further tuning, obtain a fresh independent test bank.
+
+The reproducible `benchmarks/compare_models.py` script compares all four families
+against a training-mean baseline on frozen groups. Its default short SIRDS run is
+an engineering pilot, not a recommended training budget or an architecture ranking
+for a different simulator.
+
+## Read the training history
+
+`model.history` records the training and validation loss at each evaluation step.
+W&B can plot these records live; see [tracking with Hydra or Python](hydra.qmd).
+The restored model uses the best evaluated validation checkpoint, which may be
+earlier than the final training step. Inspect `model.training_metadata`.
+
+| Observation | Interpretation to investigate | Next action |
+|---|---|---|
+| Both losses remain high or flat | Optimization, model capacity or data representation may be inadequate | Verify input/output pairing and units; check a tiny subset can be fitted; compare longer training and learning rates using validation |
+| Training improves while validation gets worse | Overfitting or a different validation regime | Inspect scenario ranges; use `TrainingConfig(patience=...)`, more independent scenarios or a smaller model |
+| Loss becomes nonfinite | Numeric instability or invalid model settings | Follow the exception, verify finite inputs, lower the learning rate and inspect architecture settings |
+| Transformer validation loss is low but generated trajectories drift | Teacher forcing and autonomous rollout solve different prediction problems | Inspect `evaluate()` results and compare an MLP; changing only the plotted training loss cannot resolve this |
+| Predictive coverage is low | A fitted generator misses observed variability, or Monte Carlo estimation is noisy | Inspect interval width and CRPS together, increase evaluation samples and inspect conditioning regimes |
+| Good mean accuracy but implausible trajectories | Output support or temporal/cross-output dependence is wrong | Apply explicit diagnostic constraints and inspect full realizations; clipping is not validation |
+| Errors concentrate in poorly covered input regions | The training bank may lack relevant scenarios | Use `assess_coverage`, measured group errors and scientifically valid candidate settings to plan more simulations |
+
+Loss values from MLP/Transformer MSE, flow velocity fitting and iTARFlow density
+training have different meanings. Compare families using common held-out
+prediction/distribution metrics, not their raw optimization loss. Repeated seeds
+and new scenario splits are needed to measure training and sampling variability;
+the package does not manufacture confidence intervals from one fit.

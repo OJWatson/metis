@@ -1,7 +1,7 @@
 import pytest
-from models.transformer import Transformer, TransformerConfig
-from models.mlp import ResidualMLP, ResidualMLPConfig
-from models.itarflow import ImprovedTARFlow, iTarFlowConfig
+from metis.models.transformer import Transformer, TransformerConfig
+from metis.models.mlp import ResidualMLP, ResidualMLPConfig
+from metis.models.itarflow import ImprovedTARFlow, iTarFlowConfig
 
 
 @pytest.fixture

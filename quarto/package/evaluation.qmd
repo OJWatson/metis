@@ -1,0 +1,80 @@
+---
+title: "Evaluate fidelity and choose more simulations"
+---
+
+A useful surrogate must reproduce the aspects of a simulator required by your
+scientific decision. Optimization loss alone does not establish this.
+
+## Held-out performance
+
+```python
+report = surrogate.evaluate(split.test, n_samples=100, seed=42)
+print(report.by_output)
+print(report.worst_groups(5))
+report.save("evaluation.json")
+fig = report.plot()  # requires [plots]
+fig.savefig("evaluation.png")
+```
+
+Reports include the resolved architecture, a fingerprint of the fitted model,
+training settings, fitting/evaluation dataset fingerprints and sample settings.
+Overlap with training or validation groups generates a warning.
+Validation is used to choose weights and tune settings, so it is not an
+independent test. Simulation replicates remain together across partitions.
+
+MAE and RMSE are measured in original units using full autonomous predictions.
+Large-unit outputs dominate aggregate errors; inspect each output and define
+acceptable errors for your task. Replicate-mean errors are reported for groups
+with identical conditioning inputs. Finite replicate means themselves have
+simulation noise.
+
+Stochastic models additionally report empirical CRPS, 90% pointwise predictive
+coverage and interval width. The intervals describe variability under the
+fitted generator, not confidence about surrogate accuracy or simultaneous
+coverage of a whole trajectory. Check temporal dependence, rare events and
+cross-output structure in application-specific analyses as well.
+
+Do not compare MSE, velocity-fitting error and negative log density as though
+they were the same score. The benchmark script compares common held-out metrics
+and records the budget used by each family. Short benchmarks test the pipeline,
+not a universal ranking of architectures.
+
+## Explicit scientific constraints
+
+```python
+report = surrogate.evaluate(split.test, constraints={
+    "nonnegative": ["S_t", "I_t", "R_t", "D_t"],
+    "nondecreasing": ["D_t"],
+    "conserved_total": {
+        "outputs": ["S_t", "I_t", "R_t", "D_t"],
+        "value": 1000, "atol": 0.001,
+    },
+})
+print(report.metadata["constraints"])
+```
+
+These are SIRDS-specific examples, not assumptions made for every dataset.
+Checks report violation fractions; they do not clip or correct predictions.
+Nonnegative/nondecreasing checks use strict zero thresholds. The conservation
+tolerance is explicitly supplied by the researcher.
+
+## Where to simulate next
+
+```python
+from metis import assess_coverage, suggest_simulations
+coverage = assess_coverage(split.train, candidate_inputs)
+suggestions = suggest_simulations(split.train, candidate_inputs, n=10)
+```
+
+You supply scientifically valid candidates. Distances are Euclidean after
+scaling each input by its training range; constant dimensions use scale one.
+The greedy rule selects the candidate furthest from existing inputs, adds it
+to the reference set, and repeats. It seeks coverage gaps, not maximal posterior
+uncertainty. It does not estimate model error, simulation cost or an optimal
+replicate allocation. Outside-range flags are marginal checks, not proof that
+a point inside the box is well supported jointly.
+
+Also inspect `worst_groups()` for measured error patterns. More coverage, more
+replicates, a different architecture and better optimization solve different
+problems. Once you adapt using test errors, obtain a fresh independent test bank
+before claiming final performance.

@@ -11,9 +11,7 @@ from dataloader import (
 )
 
 
-@pytest.mark.parametrize(
-    "config_name", ["model_sims", "res_sims", "resnmf_sims", "resnmfhigh_sims"]
-)
+@pytest.mark.parametrize("config_name", ["sirds"])
 def test_dataset_configs_load(config_name):
     """Very basic test to check that we can parse all the configs"""
     import hydra
