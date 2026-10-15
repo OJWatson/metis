@@ -11,20 +11,45 @@ overrides and sweeps. Both use the same training, evaluation and artifact code.
 
 ## Install
 
-Python 3.11+ is supported. The default library workflow runs on CPU; a compatible
-CUDA PyTorch installation can be used with `TrainingConfig(device="cuda")`.
-Install a PyTorch build suitable for your hardware, then install this fork:
+Use [uv](https://docs.astral.sh/uv/) to create a project for your surrogate work.
+Python 3.11+ is supported; these instructions choose Python 3.13 and CPU training.
+On Linux or Windows:
 
 ```bash
-python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-python -m pip install "metis-surrogate @ git+https://github.com/OJWatson/metis.git"
-metis demo --steps 100 --output metis-demo
+uv init my-surrogate --python 3.13
+cd my-surrogate
+uv add "torch>=2.10,<3" --index pytorch-cpu=https://download.pytorch.org/whl/cpu
 ```
 
+On Apple Silicon macOS, use `uv add "torch>=2.10,<3"` for the last command to
+select the platform build from PyPI. Intel Macs are unsupported by the current
+PyTorch dependency range. For the named CPU index, add `explicit = true` to its
+`[[tool.uv.index]]` entry in `pyproject.toml`, so other dependencies use PyPI.
+Then add METIS and run the bundled example:
+
+```bash
+uv add "metis-surrogate @ git+https://github.com/OJWatson/metis.git"
+uv run metis demo --steps 100 --output metis-demo
+```
+
+uv maintains `pyproject.toml` (your dependencies), `uv.lock` (resolved versions)
+and `.venv` (the project environment). Use `uv run` for commands and scripts;
+manual environment activation is unnecessary. See the
+[quickstart](https://ojwatson.github.io/metis/package/quickstart.html) for the
+complete index configuration, notebook setup and optional CUDA setup.
+
 The distribution is named **metis-surrogate** and the Python import is **metis**.
-It is not yet on PyPI. `pip install metis` installs an unrelated graph library.
-Use an isolated environment if you already use that library. Optional extras:
-`[plots]`, `[pandas]`, `[wandb]`, `[docs]`, and `[legacy]` for the historical CUDA trainer.
+It is not yet on PyPI; the existing PyPI project named `metis` is an unrelated
+graph library. Optional features can be recorded in your project together:
+
+```bash
+uv add "metis-surrogate[plots,pandas,wandb] @ git+https://github.com/OJWatson/metis.git"
+```
+
+Use only the extras you need: `[plots]` for figures, `[pandas]` for pandas tables,
+`[wandb]` for tracking, `[docs]` for notebooks, or `[legacy]` for the historical
+CUDA trainer. Because these extras are project dependencies, subsequent
+`uv run` commands retain them.
 
 ## A complete Python workflow
 
@@ -63,13 +88,13 @@ numeric arrays can use `SimulationDataset.from_arrays(...)`.
 ## The same workflow with Hydra
 
 ```bash
-metis train model=mlp training.steps=1000
-metis train --multirun model=mlp,transformer training.learning_rate=0.001,0.0003 evaluation.partition=validation
-metis train dataset=parquet dataset.path=/absolute/path/simulations.parquet 'dataset.inputs=[contact_rate,recovery_rate]' 'dataset.outputs=[incidence,prevalence]'
+uv run metis train model=mlp training.steps=1000
+uv run metis train --multirun model=mlp,transformer training.learning_rate=0.001,0.0003 evaluation.partition=validation
+uv run metis train dataset=parquet dataset.path=/absolute/path/simulations.parquet 'dataset.inputs=[contact_rate,recovery_rate]' 'dataset.outputs=[incidence,prevalence]'
 ```
 
-`metis-train` is an equivalent entry point. Use `metis train --cfg job` to inspect
-the composed configuration or `metis train --help` for groups and overrides.
+`uv run metis-train` is an equivalent entry point. Use `uv run metis train --cfg job`
+to inspect the composed configuration or `uv run metis train --help` for groups and overrides.
 Every run saves a complete `model.pt`, metrics and training history in its Hydra
 output directory. The Python and Hydra workflows use the same `Surrogate`.
 Use validation metrics to choose settings, then evaluate the chosen model on the
@@ -79,8 +104,9 @@ can use `metis.tracking.WandbTracker` with the same training progress callback.
 Tracking logs configuration and scalar metrics; it does not upload simulation
 tables or model files automatically.
 
-The old `uv run train.py --config-name default ...` workflow remains available
-from the checkout with `[legacy]` dependencies. It exposes advanced CUDA/DDP and
+The old `uv run --locked --all-extras python train.py --config-name default ...`
+workflow remains available from the checkout after the setup in
+[CONTRIBUTING.md](CONTRIBUTING.md). It exposes advanced CUDA/DDP and
 sequence-conditioning settings. Its historical checkpoint format differs from
 the new portable artifacts; use the new entry points for ordinary static-input
 training and deployment.
@@ -145,7 +171,7 @@ simple baselines and check the outcomes important for your scientific decision.
 See [CONTRIBUTING.md](CONTRIBUTING.md). CI tests the source and installed wheel,
 executes a complete beginner example, and builds the documentation. GPU/driver
 coverage is separate from the CPU test matrix. Benchmarks are reproducible with
-`python benchmarks/compare_models.py`; a short run verifies the workflow and
+`uv run --locked --all-extras python benchmarks/compare_models.py`; a short run verifies the workflow and
 is not a universal architecture ranking.
 
 MIT licensed; original implementation by Timothy Hitge and subsequent METIS

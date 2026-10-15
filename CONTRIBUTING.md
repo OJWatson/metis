@@ -1,26 +1,34 @@
 # Contributing
 
-Use Python 3.11 or newer. Install a PyTorch build appropriate to your device,
-then install the editable project and its development/legacy dependencies.
-The new public API defaults to CPU; the historical Hydra trainer uses CUDA.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and Git,
+then work from the repository root. Python 3.11+ is supported; the checkout
+selects Python 3.13. uv manages Python, the editable project, development tools
+and optional dependencies in `.venv`; no manual activation is needed.
 
 ~~~bash
-uv sync --all-extras
-uv run pytest
-uv run ruff check src tests
+git clone https://github.com/OJWatson/metis.git
+cd metis
+uv sync --locked --all-extras
+uv run --locked --all-extras pytest
+uv run --locked --all-extras ruff check src tests
+uv run --locked --all-extras ty check src
 uv build
 ~~~
 
-The committed uv.lock records a development resolution, not a promise that
-every GPU/driver combination has been tested. CPU CI also tests installation
-from a built wheel outside the checkout. PyTorch's CPU wheel index can be used
-in a separate environment to avoid CUDA downloads:
+Keep `--all-extras` on checkout `uv run` commands so synchronization retains the
+notebook, plotting, tracking, pandas and legacy dependencies. `--locked` checks
+that `pyproject.toml` agrees with the committed `uv.lock` instead of silently
+changing the resolution. The development dependency group is included by default.
 
-~~~bash
-python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-python -m pip install -e ".[legacy,docs]"
-python -m pip install pytest build
-~~~
+The checkout selects PyTorch's explicit CPU index on Linux and Windows, and the
+platform build from PyPI on Apple Silicon macOS. Intel Macs are unsupported by
+the current PyTorch dependency range. CPU CI also tests a built wheel outside the
+checkout. The committed lockfile records a development resolution, not a promise
+that every GPU/driver combination has been tested. For CUDA, follow the
+[named-index setup](https://ojwatson.github.io/metis/package/quickstart.html#optional-cuda-setup)
+to change your local torch source and lockfile, then run
+`uv sync --locked --all-extras` again. The high-level API supports CPU or CUDA;
+the historical `train.py` workflow requires CUDA.
 
 Keep source under src/metis. The root models directory is a compatibility
 layer for old source-checkout recipes. New code should import metis.
@@ -31,14 +39,15 @@ scaling isolation, run boundaries, serialization parity, original-unit
 predictions and active (nonzero) attention. Do not present a passing unit
 test as evidence of scientific accuracy.
 
-Documentation is a Quarto website. Install the Quarto CLI separately, install
-the docs extra, and run:
+Documentation is a Quarto website. Install the Quarto CLI separately; the
+`--all-extras` setup above supplies its Python dependencies. Run the CLI through
+the project environment and then check links and execute the beginner notebook:
 
 ~~~bash
-quarto render quarto --to all --no-execute
-python scripts/check_site_links.py quarto/_site
-python scripts/check_tutorial_notebook.py quarto/_site/package/quickstart.ipynb
-python examples/package_quickstart.py --steps 20 --output /tmp/metis-example
+uv run --locked --all-extras quarto render quarto --to all --no-execute
+uv run --locked --all-extras python scripts/check_site_links.py quarto/_site
+uv run --locked --all-extras python scripts/check_tutorial_notebook.py quarto/_site/package/quickstart.ipynb
+uv run --locked --all-extras python examples/package_quickstart.py --steps 20 --output /tmp/metis-example
 ~~~
 
 The beginner example and generated notebook are executed in CI separately from site rendering.

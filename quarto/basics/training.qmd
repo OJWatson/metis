@@ -7,7 +7,11 @@ execute:
 The entrypoint to a training job in Metis is `train.py`. Rather than importing training code or writing a script, in Metis we simply run `train.py` in the terminal or a notebook with the appropriate config files supplied. Given the [data and config file we prepared earlier](preparing-data.qmd), getting started with training is a matter of overriding the default data config.
 
 :::{.callout-tip}
-To follow along, either run the commands from the repository root in a terminal or download this page as a notebook and run through the cells. In a terminal, omit the notebook-only `%%bash` lines.
+First complete the [advanced source setup](installing_metis.qmd), including CUDA
+PyTorch. Run the commands from the repository root in a terminal or download
+this page as a notebook and use the checkout's `.venv` Python. Keep
+`--locked --all-extras` on the commands so uv retains the historical dependencies.
+In a terminal, omit the notebook-only `%%bash` lines.
 :::
 
 
@@ -32,7 +36,7 @@ Now we'll override the default training config to use our `sirds` dataset and in
 Now go ahead and run this:
 ```{python}
 %%bash
-uv run train.py \
+uv run --locked --all-extras python train.py \
   --config-name default \
   dataset=sirds \
   sampling.generate_samples=True \
@@ -52,7 +56,7 @@ Next we'll try a transformer. All we need to do is override the model config. Be
 
 ```{python}
 %%bash
-uv run train.py \
+uv run --locked --all-extras python train.py \
   --config-name default \
   dataset=sirds \
   sampling.generate_samples=True \
@@ -72,7 +76,7 @@ Again all we need to do is swap out the model config. Since this model is stocha
 
 ```{python}
 %%bash
-uv run train.py \
+uv run --locked --all-extras python train.py \
   --config-name default \
   dataset=sirds \
   sampling.generate_samples=True \

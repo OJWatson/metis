@@ -11,16 +11,20 @@ Metis can take advantage of multiple GPUs located in the same machine via *data 
 
 ## From one to four GPUs
 
+Complete the [advanced source setup](../basics/installing_metis.qmd) with a CUDA
+PyTorch build first. The commands below retain the checkout's optional
+dependencies through `--locked --all-extras`.
+
 Recall our usual single-GPU command,
 
 ```bash
-uv run train.py --config-name default dataset=sirds
+uv run --locked --all-extras python train.py --config-name default dataset=sirds
 ```
 
 To use four GPUs on one machine, set `num_gpus`:
 
 ```bash
-uv run train.py --config-name default dataset=sirds num_gpus=4
+uv run --locked --all-extras python train.py --config-name default dataset=sirds num_gpus=4
 ```
 
 `train.py` starts one worker process per GPU itself, so everything else (Hydra output directories, checkpoints, wandb logging, `--multirun` sweeps) works exactly as it does on one GPU.
@@ -28,7 +32,7 @@ uv run train.py --config-name default dataset=sirds num_gpus=4
 In cases where you want to use only a subset of the GPUs, the `CUDA_VISIBLE_DEVICES` environment variable can be used to restrict the GPUs visible to `train.py`. For example, to train on only GPUs `2` and `3`:
 
 ```bash
-CUDA_VISIBLE_DEVICES=2,3 uv run train.py --config-name default dataset=sirds num_gpus=2
+CUDA_VISIBLE_DEVICES=2,3 uv run --locked --all-extras python train.py --config-name default dataset=sirds num_gpus=2
 ```
 
 

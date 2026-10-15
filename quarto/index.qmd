@@ -34,11 +34,29 @@ The new high-level API currently targets static inputs and fixed time grids.
 
 ## Installation
 
+Start a project with [uv](https://docs.astral.sh/uv/) and install CPU PyTorch.
+On Linux or Windows:
+
 ~~~bash
-python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-python -m pip install "metis-surrogate @ git+https://github.com/OJWatson/metis.git"
-metis demo --steps 100 --output metis-demo
+uv init my-surrogate --python 3.13
+cd my-surrogate
+uv add "torch>=2.10,<3" --index pytorch-cpu=https://download.pytorch.org/whl/cpu
 ~~~
+
+On Apple Silicon macOS, use `uv add "torch>=2.10,<3"` for the last command.
+Intel Macs are unsupported by the current PyTorch dependency range. Set
+`explicit = true` on a named PyTorch index in `pyproject.toml` so unrelated
+dependencies use PyPI, then add METIS:
+
+~~~bash
+uv add "metis-surrogate @ git+https://github.com/OJWatson/metis.git"
+uv run metis demo --steps 100 --output metis-demo
+~~~
+
+uv maintains your dependency file, lockfile and `.venv`; run project commands
+with `uv run`, without manually activating an environment. The
+[quickstart](package/quickstart.qmd) shows the complete index configuration,
+optional extras, notebook setup and CUDA setup.
 
 Python 3.11+ is supported. The import is `metis`; the distribution is
 `metis-surrogate`. This project is not yet published on PyPI, and the existing

@@ -15,6 +15,9 @@ Conceptually, we imagine that our true data-generating process, has some underly
 Run the commands from the repository root in a terminal, or download this page
 as a notebook into `examples/` and run its cells. The setup cell below switches
 to the repository root. In a terminal, omit the notebook-only `%%bash` lines.
+First complete the [advanced source setup](../basics/installing_metis.qmd),
+including CUDA PyTorch. Use the checkout's `.venv` Python for notebook cells and
+retain `--locked --all-extras` for commands run through uv.
 
 ```{python}
 import os
@@ -44,7 +47,7 @@ As before, we'll train our normalising flow (NF) surrogate on the SIRDS dataset 
 
 ```{python}
 %%bash
-uv run train.py \
+uv run --locked --all-extras python train.py \
   --config-name default \
   model=itarflow_default \
   dataset=sirds \
@@ -382,12 +385,15 @@ No-U-Turn Sampler (NUTS), an adaptive Hamiltonian Monte Carlo method. We reuse
 the uniform priors, observation, and `compute_log_likelihood` above; the
 mortality rate remains fixed.
 
-Pyro is optional. Install it into the project's environment before continuing
-(the package is named `pyro-ppl`, but imported as `pyro`):
+Pyro is optional. Record it in the local project before continuing, then
+synchronize all extras again to retain the historical notebook dependencies
+(the package is named `pyro-ppl`, but imported as `pyro`). This updates the local
+`pyproject.toml` and `uv.lock`:
 
 ```{python}
 %%bash
-uv pip install pyro-ppl
+uv add pyro-ppl
+uv sync --locked --all-extras
 ```
 
 Each `pyro.sample` declares a parameter's prior. `pyro.factor` adds the

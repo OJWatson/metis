@@ -19,9 +19,10 @@ jobs:
       MPLBACKEND: Agg
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: astral-sh/setup-uv@v9.0.0
         with:
           python-version: "3.13"
+          enable-cache: true
       - uses: quarto-dev/quarto-actions/setup@v2
         with:
           version: "1.10.19"
@@ -29,16 +30,16 @@ jobs:
         run: quarto install chrome-headless-shell --no-prompt
       - name: Install documentation environment
         run: |
-          python -m pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
-          python -m pip install ".[docs]"
+          uv sync --locked --extra docs
+          echo "QUARTO_PYTHON=$GITHUB_WORKSPACE/.venv/bin/python" >> "$GITHUB_ENV"
       - name: Execute installed-package beginner workflow
-        run: python examples/package_quickstart.py --steps 20 --output /tmp/metis-doc-example
+        run: uv run --locked --extra docs python examples/package_quickstart.py --steps 20 --output /tmp/metis-doc-example
       - name: Render site
-        run: quarto render quarto --to all --no-execute
+        run: uv run --locked --extra docs quarto render quarto --to all --no-execute
       - name: Check local documentation links and assets
-        run: python scripts/check_site_links.py quarto/_site
+        run: uv run --locked --extra docs python scripts/check_site_links.py quarto/_site
       - name: Execute the downloadable beginner notebook
-        run: python scripts/check_tutorial_notebook.py quarto/_site/package/quickstart.ipynb
+        run: uv run --locked --extra docs python scripts/check_tutorial_notebook.py quarto/_site/package/quickstart.ipynb
       - uses: actions/upload-pages-artifact@v4
         with:
           path: quarto/_site

@@ -13,6 +13,8 @@
 - Correct the final Heun integration step; Heun samples change numerically,
   while the flow-matching training objective is unchanged.
 - Build and test distributions and documentation in GitHub Actions.
+- Use uv projects throughout installation, examples and CI, with a committed
+  CPU PyTorch lock and an explicit opt-in GPU source.
 
 This is an early research release. Scientific validation remains specific to
 the simulator and intended application. The fork is MIT licensed. It is not
