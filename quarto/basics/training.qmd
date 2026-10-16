@@ -149,7 +149,9 @@ generated trajectories.
 reports = {
     "MLP": evaluate(mlp, split.test),
     "Transformer": evaluate(transformer, split.test),
-    "Flow matching": evaluate(flow, split.test, n_samples=30, num_steps=30),
+    "Flow matching": evaluate(
+        flow, split.test, n_samples=30, num_steps=30, reuse_samples=True
+    ),
 }
 comparison = pd.DataFrame([
     {"Model": name, "Test RMSE (people)": report.metrics["rmse"],
@@ -158,6 +160,11 @@ comparison = pd.DataFrame([
 ])
 comparison.round(2)
 ```
+
+Here `reuse_samples=True` generates 30 surrogate draws per parameter setting
+and scores that same ensemble against all five SIRDS realisations. This avoids
+repeated generation while retaining every test run. More draws reduce Monte
+Carlo noise in the reported metrics.
 
 These are three short tutorial fits, all trained on the same 600 settings and
 checked on the same 200 test settings. They are not a tuned comparison of model

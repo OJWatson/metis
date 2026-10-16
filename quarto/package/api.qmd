@@ -118,11 +118,21 @@ a discrete count probability or a posterior. See the [likelihood exercise](../sb
 ## EvaluationReport
 
 `surrogate.evaluate(bank, n_samples=100, seed=42, num_steps=50, solver="heun",
-constraints=None, batch_size=64)` is equivalent to `metis.evaluate(surrogate, bank, ...)`.
+constraints=None, batch_size=64, reuse_samples=False)` is equivalent to `metis.evaluate(surrogate, bank, ...)`.
 The bank must have the full fitted schema and grid, including observed channels.
 Evaluation supplies those channels as conditioning and scores predicted channels.
 `batch_size` bounds evaluation memory; all runs are evaluated. Stochastic
 metrics require at least two samples; changing batch size changes Monte Carlo draws.
+
+For replicated simulations, `reuse_samples=True` generates one `n_samples`-draw
+ensemble per exactly identical static input and complete conditioning path.
+Every observed replicate is still scored with its original weight; only sample
+generation is shared. This changes finite Monte Carlo estimates and shares their
+sampling noise: replicate-mean error now uses one ensemble rather than averaging
+independent ensembles. Contexts are processed in first-appearance order, in
+bounded batches, and the same data, seed and batching reproduce the draws.
+Metadata records the policy, unique contexts and generated ensemble/trajectory
+counts. The option is ignored for deterministic models.
 
 The report exposes `metrics` (aggregate dictionary), `by_output` and `by_group`
 (Polars tables), and `metadata`. `to_dict()` serializes a report;

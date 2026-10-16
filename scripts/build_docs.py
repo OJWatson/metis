@@ -56,6 +56,18 @@ def portable_markdown(text, relative):
     text = re.sub(r"(?<=\]\()([^\s)]+)(?=\))", lambda match: absolute(match[1]), text)
     text = re.sub(r'(?<=src=")([^\"]+)(?=")', lambda match: absolute(match[1]), text)
 
+    def plain_image(match):
+        caption, target, attributes = match.groups()
+        description = re.search(r'''\bfig-alt\s*=\s*(["'])(.*?)\1''', attributes)
+        alt = description[2] if description else caption
+        if description:
+            alt = re.sub(r"([\\\[\]])", r"\\\1", alt)
+        image = f"![{alt}]({target})"
+        # Quarto uses the bracket text as a visible caption; Markdown only uses it as alt text.
+        return image + (f"\n\n{caption}" if caption else "")
+
+    text = re.sub(r"!\[([^\]]*)\]\(([^)\n]+)\)\{([^}\n]*)\}", plain_image, text)
+
     def plain_div(match):
         attributes = match[1] or ""
         title = re.search(r'title="([^"]+)"', attributes)

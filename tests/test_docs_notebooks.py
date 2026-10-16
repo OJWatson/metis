@@ -103,6 +103,31 @@ def test_export_retains_intro_and_scientific_figure_captions(tmp_path):
     assert notebook.cells[-2].outputs == code.outputs
 
 
+@pytest.mark.parametrize("image, expected", [
+    (
+        '![](images/attention.svg){fig-alt="A causal attention mask."}',
+        '![A causal attention mask.](https://ojwatson.github.io/metis/models/images/attention.svg)',
+    ),
+    (
+        '![Visible caption.](images/attention.svg){#fig-attention fig-alt=\'Attention [x4].\' width=400}',
+        '![Attention \\[x4\\].](https://ojwatson.github.io/metis/models/images/attention.svg)\n\nVisible caption.',
+    ),
+    (
+        '![Visible caption.](images/attention.svg){width=400}',
+        '![Visible caption.](https://ojwatson.github.io/metis/models/images/attention.svg)\n\nVisible caption.',
+    ),
+    (
+        '![Ordinary Markdown alt text.](images/attention.svg)',
+        '![Ordinary Markdown alt text.](https://ojwatson.github.io/metis/models/images/attention.svg)',
+    ),
+])
+def test_notebook_images_preserve_alt_text_and_captions_without_quarto_attributes(image, expected):
+    builder = load_script("build_docs")
+    text = f'::: {{#fig-attention}}\n{image}\n\nSeparate explanation.\n:::'
+    result = builder.portable_markdown(text, Path("models/transformer.qmd"))
+    assert result.strip() == expected + "\n\nSeparate explanation."
+
+
 def test_colab_link_follows_jupyter_download(tmp_path):
     builder = load_script("build_docs")
     page = tmp_path / "tutorial.html"
