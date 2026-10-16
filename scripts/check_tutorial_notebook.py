@@ -2,6 +2,7 @@
 
 import argparse
 from pathlib import Path
+import re
 import tempfile
 
 import nbformat
@@ -31,6 +32,12 @@ def inspect(path):
     )
     if not figures:
         raise ValueError(f"{path}: expected at least one displayed tutorial figure")
+    for index, cell in enumerate(cells, 1):
+        if re.search(r"^#\|\s*fig-cap:", cell.source, re.MULTILINE) and not any(
+            set(output.get("data", {})) & {"image/png", "image/svg+xml", "image/jpeg"}
+            for output in cell.outputs
+        ):
+            raise ValueError(f"{path}: captioned figure missing from cell {index}")
     return {"path": str(path), "code_cells": len(cells), "figures": figures}
 
 

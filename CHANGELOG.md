@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Restore the complete original SIRDS bank in the installed package and every
+  tutorial: 1,000 parameter settings, five realisations and 200 daily outputs.
+  `load_example(small=True)` is now the explicit installation-test subset.
+- Restore the full five-parameter coverage pairplot and execute the inference,
+  conditioning, tracking and local-sweep examples with their figures.
+- Make plain `uv sync` prepare the checkout for the walkthrough, including
+  JupyterLab. Simplify installation and Colab setup to the same uv workflow.
 - Restore the original documentation sequence and explanations, using SIRDS
   throughout the installed-package walkthrough and runnable examples.
 - Fold the separate package tutorials into the original Basics and model pages,

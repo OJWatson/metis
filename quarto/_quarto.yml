@@ -75,4 +75,5 @@ execute:
   error: false
   freeze: false
   cache: false
+  timeout: 1800
 keep-ipynb: true

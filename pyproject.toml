@@ -21,7 +21,7 @@ dependencies = [
 plots = ["matplotlib>=3.9,<4"]
 wandb = ["wandb>=0.25,<1"]
 pandas = ["pandas>=2.2,<4", "pyarrow>=18"]
-docs = ["ipykernel>=6.29", "nbformat>=5.10", "nbclient>=0.10", "matplotlib>=3.9,<4", "seaborn>=0.13.2", "pandas>=2.2,<4", "pyarrow>=18"]
+docs = ["ipykernel>=6.29", "nbformat>=5.10", "nbclient>=0.10", "jupyterlab>=4,<5", "pyro-ppl>=1.9,<2", "wandb>=0.25,<1", "matplotlib>=3.9,<4", "seaborn>=0.13.2", "pandas>=2.2,<4", "pyarrow>=18"]
 
 [project.scripts]
 metis = "metis.cli:main"
@@ -44,7 +44,10 @@ testpaths = ["tests"]
 markers = ["slow: marks longer numerical tests"]
 
 [dependency-groups]
-dev = ["build>=1.2", "pytest>=8.3", "pre-commit>=4", "ruff==0.14.0", "ty==0.0.46"]
+dev = ["build>=1.2", "pytest>=8.3", "pre-commit>=4", "ruff==0.14.0", "ty==0.0.46", { include-group = "docs" }]
+# A checkout is ready for the walkthrough after plain `uv sync`. These tools
+# remain optional for researchers who install METIS in their own project.
+docs = ["ipykernel>=6.29", "nbformat>=5.10", "nbclient>=0.10", "jupyterlab>=4,<5", "pyro-ppl>=1.9,<2", "wandb>=0.25,<1", "matplotlib>=3.9,<4", "seaborn>=0.13.2", "pandas>=2.2,<4", "pyarrow>=18"]
 
 # Keep the development environment usable on a CPU-only workstation.
 # Consumers select their own PyTorch source in their research project's config.

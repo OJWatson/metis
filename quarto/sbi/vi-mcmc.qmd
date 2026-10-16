@@ -22,12 +22,14 @@ calculation of $\hat p$ does not make it the exact simulator likelihood.
 ## Setup
 
 We continue with the same [SIRDS model](../basics/sirds-example.qmd), its four
-count trajectories, and the bundled simulation bank. The following cells run
-when the documentation is built; the optional VI and MCMC recipes later on
-explain how a validated surrogate would enter an inference workflow.
+count trajectories, and the full original simulation bank: 1,000 parameter
+settings, five realisations each, and days 1–200. The following cells run
+when the documentation is built, including VI and MCMC. They illustrate
+inference under a fitted surrogate; they do not validate it as a SIRDS likelihood.
 
 ```{python}
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import torch
 from metis import load_example, Surrogate, TrainingConfig
@@ -40,15 +42,22 @@ torch.manual_seed(42)
 ## Train the surrogate
 
 As in the normalising-flow tutorial, we fit a small iTARFlow model on the SIRDS
-training groups and select its weights using the validation groups.
+training groups and select its weights using the validation groups. Here we
+use 10,000 optimiser updates for the likelihood example; this takes several
+minutes on a CPU.
+Setting `patch_size=5` groups five adjacent days into each internal token to
+make CPU training faster; all 200 daily values are still modelled and returned.
 
 ```{python}
 nf = Surrogate(
     "itarflow",
-    model_options={"channels": 32, "num_layers": 1, "num_blocks": 2, "num_heads": 2},
+    model_options={
+        "channels": 32, "num_layers": 1, "num_blocks": 2, "num_heads": 2,
+        "patch_size": 5,
+    },
 ).fit(
     split.train, split.validation,
-    config=TrainingConfig(steps=1000, batch_size=64, eval_every=100, seed=42),
+    config=TrainingConfig(steps=10000, batch_size=64, eval_every=100, seed=42),
 )
 nf.save("sirds-likelihood.pt")
 ```
@@ -68,22 +77,30 @@ print("Outputs:", nf.output_names)
 ## Preparing an observation
 
 Use one trajectory from a held-out SIRDS parameter group as our observation.
-For this illustration, select a group inside each training-input range. Its
-generating parameters are known, so we can compare them with a likelihood
-slice later. For a scientific application this would instead be the observed
+For this illustration, select a group inside each training-input range and
+the prior bounds used below. Its generating parameters are known, so we can
+compare them with a likelihood slice later. For a scientific application this would instead be the observed
 data whose likelihood is being evaluated.
 
 ```{python}
+prior_bounds = {
+    "I_0": (0.01, 0.1), "beta": (0.2, 0.8),
+    "gamma": (0.05, 0.3), "omega": (0.005, 0.05),
+}
 in_range = np.all(
     (split.test.inputs >= split.train.inputs.min(axis=0))
     & (split.test.inputs <= split.train.inputs.max(axis=0)), axis=1,
 )
+for name, (lower, upper) in prior_bounds.items():
+    values = split.test.inputs[:, bank.input_names.index(name)]
+    in_range &= (values >= lower) & (values <= upper)
 observation_index = np.flatnonzero(in_range)[0]
 true_inputs = split.test.inputs[observation_index:observation_index + 1].copy()
 y_obs = split.test.outputs[observation_index:observation_index + 1].copy()
 same_setting = np.all(split.test.inputs == true_inputs[0], axis=1)
 replicates = split.test.outputs[same_setting]
 draws = nf.sample(true_inputs, n_samples=100, seed=13)[0]
+pd.DataFrame(true_inputs, columns=bank.input_names)
 ```
 
 ```{python}
@@ -104,9 +121,10 @@ fig.tight_layout()
 plt.show()
 ```
 
-This short fit illustrates the interface. The plots reveal where its samples
-miss the SIRDS trajectories; they do not establish that its likelihood is
-adequate for parameter inference.
+At this setting, the fitted surrogate overestimates the outbreak and generates
+some negative counts. More training has not made this a reliable SIRDS
+likelihood. The inference below shows how to connect the components and inspect
+the resulting target; it should not be interpreted as validated parameter recovery.
 
 ## Evaluating the likelihood
 
@@ -158,7 +176,7 @@ No observation-error model is added in this tutorial.
 
 ## Choosing the prior
 
-For the **optional inference recipes** below, suppose we want to infer the
+We infer the
 initial infected fraction $I_0$, transmission $\beta$, recovery $\gamma$ and
 waning $\omega$, holding mortality $\mu$ known. The example uniform priors are:
 
@@ -173,7 +191,11 @@ $$
 
 These are choices for the example, not priors selected by METIS. They must be
 scientifically justified and covered by a validated simulation bank before
-use. The small bundled bank and short fit above are not that validation.
+use. The training objective and single likelihood slice above are not that
+validation.
+The bounds reach slightly beyond the extrema of this finite training sample,
+so METIS warns when inference proposes inputs there. Both methods keep these
+same priors; extrapolation remains a limitation of the demonstration.
 
 ## The inference problem
 
@@ -186,17 +208,18 @@ p(\theta\mid y_{\mathrm{obs}})\propto
 $$
 
 VI fits a tractable distribution to this target; MCMC generates samples from
-it. The following code is an **unexecuted advanced recipe**, rather than
-reported inference results. It uses the same SIRDS observation and the public
-likelihood interface demonstrated above.
+it. Both use the same held-out SIRDS observation and public likelihood interface.
+The inference results below are conditional on this fitted continuous surrogate,
+its point-estimated neural weights, the chosen priors and the known mortality
+rate. They are not validated estimates under the exact SIRDS simulator.
 
-```python
+```{python}
 import torch.distributions as dist
 from torch import nn
 
-parameter_names = ["I_0", "beta", "gamma", "omega"]
-lo = torch.tensor([0.01, 0.2, 0.05, 0.005])
-hi = torch.tensor([0.1, 0.8, 0.3, 0.05])
+parameter_names = list(prior_bounds)
+lo = torch.tensor([bounds[0] for bounds in prior_bounds.values()])
+hi = torch.tensor([bounds[1] for bounds in prior_bounds.values()])
 known_mu = float(true_inputs[0, bank.input_names.index("mu")])
 
 # Freeze fitted neural weights while preserving gradients through the inputs.
@@ -227,11 +250,13 @@ $$
 
 This is equivalent to minimising the reverse KL divergence from $q_\phi$ to
 the approximate posterior. As in the original workflow, use a multivariate
-Gaussian transformed into the parameter bounds:
+Gaussian transformed into the parameter bounds. We use 1,500 Adam updates,
+32 Monte Carlo draws per update and learning rate 0.02:
 
-```python
+```{python}
 import torch.nn.functional as F
 
+torch.manual_seed(42)
 n_params = len(parameter_names)
 q_mu = nn.Parameter(torch.zeros(n_params))
 q_L_flat = nn.Parameter(torch.zeros(n_params * (n_params + 1) // 2))
@@ -262,7 +287,10 @@ for step in range(1500):
 
 with torch.no_grad():
     vi_samples = build_q().sample((5000,)).numpy()
+```
 
+```{python}
+#| fig-cap: "VI ELBO for the iTARFlow surrogate fitted on the full original SIRDS training partition, conditional on one held-out trajectory and the stated priors. This is an optimisation diagnostic, not a likelihood-validation result."
 fig, ax = plt.subplots(figsize=(7, 3))
 ax.plot(elbo_history)
 ax.set(xlabel="VI step", ylabel="ELBO")
@@ -274,17 +302,14 @@ not show that the approximation represents every posterior mode or correlation.
 
 ## MCMC
 
-Pyro's No-U-Turn Sampler (NUTS) can sample the same surrogate-based target. Pyro
-is optional; add it to your uv project before running this recipe:
-
-```bash
-uv add pyro-ppl
-```
+Pyro's No-U-Turn Sampler (NUTS) samples the same surrogate-based target. Pyro
+is included in METIS's tutorial dependencies and in the Colab setup. If you
+installed METIS without those extras, add it with `uv add pyro-ppl`.
 
 Each `pyro.sample` declares a prior, and `pyro.factor` contributes the surrogate
 log likelihood. Pyro handles the transforms for bounded parameters.
 
-```python
+```{python}
 import pyro
 import pyro.distributions as pyro_dist
 from pyro.infer import MCMC, NUTS
@@ -299,52 +324,124 @@ def posterior_model():
     pyro.factor("surrogate_likelihood", compute_log_likelihood(theta[None])[0])
 
 kernel = NUTS(posterior_model, full_mass=True, target_accept_prob=0.8)
-mcmc = MCMC(kernel, warmup_steps=500, num_samples=1000, num_chains=1)
+mcmc = MCMC(kernel, warmup_steps=500, num_samples=1000, num_chains=1, disable_progbar=True)
 mcmc.run()
 mcmc.summary(prob=0.95)
+diagnostics = mcmc.diagnostics()
+print("Divergences:", sum(len(indices) for indices in diagnostics["divergences"].values()))
+print("Acceptance rate:", diagnostics["acceptance rate"])
 mcmc_draws = mcmc.get_samples()
 mcmc_samples = torch.stack([mcmc_draws[name] for name in parameter_names], dim=1)
 ```
 
-Warmup adapts the sampler and is discarded. This notebook-style recipe shows
-one chain; scientific inference needs independently initialised chains, mixing
-and effective-sample-size checks, divergence checks and between-chain
-convergence diagnostics.
+Warmup adapts the sampler and is discarded. We run one chain with 500 warmup
+steps and retain 1,000 draws. The summary shows effective sample sizes and
+split-chain R-hat; a one-chain result cannot establish agreement across
+independently initialised chains. Inspect these diagnostics and the traces
+before interpreting posterior features.
 
-### Comparing VI and MCMC
+### MCMC trace plots
 
-Plot both sets of marginal samples, then examine joint parameter relationships
-and trace plots. Agreement between the methods does not establish that the
-surrogate likelihood itself is accurate.
-
-```python
-fig, axes = plt.subplots(1, 4, figsize=(12, 3))
-for j, ax in enumerate(axes):
-    ax.hist(vi_samples[:, j], bins=30, density=True, histtype="step", label="VI")
-    ax.hist(mcmc_samples[:, j].numpy(), bins=30, density=True,
-            histtype="step", label="MCMC")
-    generating = true_inputs[0, bank.input_names.index(parameter_names[j])]
-    ax.axvline(generating, color="black", linestyle="--", label="Generating value")
-    ax.set(xlabel=parameter_names[j], ylabel="Density")
+```{python}
+#| fig-cap: "One-chain NUTS traces for the iTARFlow SIRDS surrogate posterior, conditional on the selected held-out trajectory and stated priors. Dashed lines show the generating parameters; warmup is excluded."
+fig, axes = plt.subplots(4, 1, figsize=(9, 8), sharex=True)
+for j, (name, ax) in enumerate(zip(parameter_names, axes)):
+    ax.plot(mcmc_samples[:, j].numpy(), linewidth=0.6)
+    generating = true_inputs[0, bank.input_names.index(name)]
+    ax.axhline(generating, color="black", linestyle="--", label="Generating value")
+    ax.set(ylabel=name)
 axes[0].legend()
+axes[-1].set_xlabel("Retained MCMC draw")
 fig.tight_layout()
 plt.show()
 ```
 
+### Comparing VI and MCMC
+
+Compare marginal distributions on the diagonal and joint parameter
+relationships below it. Agreement between the methods does not establish that
+the surrogate likelihood itself is accurate. Differences can reflect a
+restricted variational family, incomplete optimisation or inadequate MCMC mixing.
+
+```{python}
+#| code-fold: true
+#| code-summary: "Plot marginal and joint VI/MCMC draws"
+#| fig-cap: "VI and one-chain NUTS approximations to the same iTARFlow SIRDS surrogate posterior, using the full original training bank and one held-out observation. Dashed lines indicate its generating parameters. These distributions exclude uncertainty in fitted neural weights."
+mcmc_array = mcmc_samples.numpy()
+comparison_samples = [("VI", vi_samples, "steelblue"),
+                      ("MCMC", mcmc_array, "darkorange")]
+fig, axes = plt.subplots(4, 4, figsize=(10, 9))
+for i, row in enumerate(axes):
+    for j, ax in enumerate(row):
+        if j > i:
+            ax.axis("off")
+            continue
+        if i == j:
+            bins = np.linspace(*prior_bounds[parameter_names[i]], 45)
+            for label, samples, colour in comparison_samples:
+                ax.hist(samples[:, i], bins=bins, density=True,
+                        histtype="step", linewidth=1.5, color=colour, label=label)
+        else:
+            for label, samples, colour in comparison_samples:
+                ax.scatter(samples[:1000, j], samples[:1000, i],
+                           s=5, alpha=0.12, color=colour, rasterized=True)
+            ax.axhline(true_inputs[0, bank.input_names.index(parameter_names[i])],
+                       color="black", linestyle="--", linewidth=0.8)
+            ax.set_ylim(prior_bounds[parameter_names[i]])
+        ax.axvline(true_inputs[0, bank.input_names.index(parameter_names[j])],
+                   color="black", linestyle="--", linewidth=0.8)
+        ax.set_xlim(prior_bounds[parameter_names[j]])
+        if j == 0:
+            ax.set_ylabel("Density" if i == 0 else parameter_names[i])
+        if i == 3:
+            ax.set_xlabel(parameter_names[j])
+axes[0, 0].legend()
+fig.tight_layout()
+plt.show()
+```
+
+The central 95% intervals below describe parameter uncertainty under each
+approximation to this surrogate posterior. They are not confidence intervals
+for the true simulator parameters.
+
+```{python}
+#| tbl-cap: "VI and one-chain NUTS parameter summaries for the full-bank iTARFlow SIRDS surrogate, conditional on the same held-out trajectory, stated priors and fixed mortality rate."
+summaries = []
+for label, samples, _ in comparison_samples:
+    for j, name in enumerate(parameter_names):
+        lower, upper = np.quantile(samples[:, j], [0.025, 0.975])
+        summaries.append({
+            "Method": label, "Parameter": name, "Mean": samples[:, j].mean(),
+            "2.5%": lower, "97.5%": upper,
+            "Generating value": true_inputs[0, bank.input_names.index(name)],
+        })
+pd.DataFrame(summaries).round(4)
+```
+
 ### Posterior predictive checks
 
-Generate SIRDS surrogate trajectories at posterior parameter draws and compare
-with the observed trajectory. Do not clip negative counts or enforce
+Generate surrogate trajectories at VI and MCMC parameter draws and compare
+with the observed SIRDS trajectory. We do not clip negative counts or enforce
 conservation after sampling: those discrepancies help reveal a poor surrogate.
 
-```python
-selected = mcmc_samples[:100]
-posterior_inputs = make_inputs(selected).detach().numpy()
-posterior_predictive = nf.sample(posterior_inputs, n_samples=1, seed=42)[:, 0]
+```{python}
+#| code-fold: true
+#| code-summary: "Draw trajectories under VI and MCMC parameter samples"
+#| fig-cap: "Posterior predictive trajectories under the fitted iTARFlow SIRDS surrogate for VI (blue) and one-chain NUTS (orange), conditional on the selected held-out observation (black). Each method supplies 100 parameter draws and one surrogate trajectory per draw; no clipping or conservation correction is applied."
+posterior_predictive = {}
+for label, samples, colour in comparison_samples:
+    selected = torch.as_tensor(samples[:100], dtype=torch.float32)
+    posterior_inputs = make_inputs(selected).detach().numpy()
+    posterior_predictive[label] = nf.sample(
+        posterior_inputs, n_samples=1, seed=42
+    )[:, 0]
 
-fig, axes = plt.subplots(2, 2, figsize=(9, 5), sharex=True)
+fig, axes = plt.subplots(2, 2, figsize=(10, 6), sharex=True)
 for j, ax in enumerate(axes.flat):
-    ax.plot(bank.times, posterior_predictive[:, :, j].T, color="C0", alpha=0.1)
+    for label, _, colour in comparison_samples:
+        ax.plot(bank.times, posterior_predictive[label][:, :, j].T,
+                color=colour, alpha=0.08, linewidth=0.7)
+        ax.plot([], [], color=colour, label=label)
     ax.plot(bank.times, y_obs[0, :, j], color="black", label="Observation")
     ax.set(title=bank.output_names[j], xlabel="Time (days)", ylabel="People")
 axes[0, 0].legend()
@@ -352,7 +449,8 @@ fig.tight_layout()
 plt.show()
 ```
 
-These posterior samples would describe parameter uncertainty under the chosen
-prior and fitted surrogate. They do not include uncertainty in the fitted
-neural weights. For SIRDS, a further check is to run the actual simulator at
-posterior draws and compare those trajectories with the observation.
+These posterior draws describe parameter uncertainty under the chosen prior
+and fitted surrogate. The predictive draws also include the variability
+learned by that surrogate, but neither includes uncertainty in its neural
+weights. A further validation step is to run the actual SIRDS simulator at
+posterior draws and compare its trajectories with the observation.

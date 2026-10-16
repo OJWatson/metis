@@ -87,9 +87,15 @@ uv run metis train model=itarflow model.model_options.channels=128
 
 ## Training on SIRDS
 
-We use the same [SIRDS simulations](../basics/sirds-example.qmd) and grouped
-train/validation/test split as the [training tutorial](../basics/training.qmd).
-This small CPU fit uses 1,000 optimizer steps.
+We use the full [SIRDS bank](../basics/sirds-example.qmd): 1,000 parameter
+settings, five realisations per setting and all 200 daily outputs. The grouped
+split matches the [training tutorial](../basics/training.qmd): 600 settings for
+training, 200 for validation and 200 for testing. This CPU fit uses 1,000
+optimizer steps.
+
+For this 200-day example we set `patch_size=5`, grouping five daily time points
+into each transformer token. The model still generates all 200 daily outputs;
+the shorter token sequence makes training and sampling faster.
 
 ```{python}
 import numpy as np
@@ -103,7 +109,8 @@ split = bank.split(seed=42)
 ```{python}
 model = Surrogate(
     "itarflow",
-    model_options={"channels": 32, "num_blocks": 2, "num_layers": 1, "num_heads": 2},
+    model_options={"channels": 32, "num_blocks": 2, "num_layers": 1, "num_heads": 2,
+                   "patch_size": 5},
 ).fit(
     split.train, split.validation,
     config=TrainingConfig(steps=1000, batch_size=64, eval_every=100, seed=42),
@@ -113,7 +120,7 @@ model = Surrogate(
 ```{python}
 #| code-fold: true
 #| code-summary: "Plot training and validation loss"
-#| fig-cap: "iTARFlow: training and validation loss for the bundled SIRDS bank."
+#| fig-cap: "iTARFlow: loss on the full SIRDS bank: 600 training settings and 200 validation settings."
 validation = [row for row in model.history if "validation_loss" in row]
 fig, ax = plt.subplots(figsize=(6, 3))
 ax.plot([row["step"] for row in model.history],
@@ -140,7 +147,7 @@ print(f"Smallest generated compartment count: {draws.min():.1f}")
 ```{python}
 #| code-fold: true
 #| code-summary: "Compare surrogate samples with SIRDS simulations"
-#| fig-cap: "iTARFlow: generated trajectories and five SIRDS simulations at the first held-out parameter setting. Shading spans the pointwise 5th–95th percentiles of 100 surrogate draws, after fitting the bundled SIRDS training split."
+#| fig-cap: "iTARFlow: generated trajectories and five SIRDS simulations at the first held-out parameter setting. Shading spans the pointwise 5th–95th percentiles of 100 surrogate draws, after fitting 600 settings from the full 200-day SIRDS bank."
 same_inputs = np.all(split.test.inputs == inputs[0], axis=1)
 replicates = split.test.outputs[same_inputs]
 low, high = np.quantile(draws, [0.05, 0.95], axis=0)
@@ -158,11 +165,11 @@ fig.tight_layout()
 plt.show()
 ```
 
-This short fit generates much wider variation than the SIRDS simulations,
-including negative counts. It is not yet a faithful SIRDS surrogate. Check
-samples and performance across the whole held-out bank, as in the
-[training tutorial](../basics/training.qmd); a density value alone does not
-establish a good fit.
+Here the generated recovered and dead compartments drift from the simulator
+paths, and some draws are negative. This short fit needs improvement before use
+as a SIRDS surrogate. Check performance across the whole held-out bank, as in
+the [training tutorial](../basics/training.qmd); a density value alone does not
+establish that the model reproduces the SIRDS dynamics or its nonnegative counts.
 
 The flow can also evaluate the log density of a held-out trajectory, in the
 original output units:

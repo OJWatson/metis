@@ -430,7 +430,7 @@ def main(argv=None):
         "--full-sirds",
         dest="data",
         type=Path,
-        help="Explicit SIRDS Parquet bank using I_0,beta,gamma,omega,mu; S_t,I_t,R_t,D_t; t and rep. Default: bundled 100-group/40-timepoint bank.",
+        help="Explicit SIRDS Parquet bank using I_0,beta,gamma,omega,mu; S_t,I_t,R_t,D_t; t and rep. Default: complete bundled 1,000-group/200-timepoint bank.",
     )
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--batch-size", type=int, default=64)

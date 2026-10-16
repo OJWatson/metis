@@ -1,17 +1,26 @@
 ---
 title: "Weights & Biases"
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
+execute:
+  eval: true
 ---
 
 [Weights & Biases](https://wandb.ai) is a platform for managing sweeps and
 tracking experiments. It lets you follow training progress and keep a record
 of the settings and results from each run.
 
-Add METIS's optional W&B support to your uv project, then sign in:
+The walkthrough environment includes W&B. To track runs online, sign in:
 
 ```bash
-uv add "metis-surrogate[plots,wandb] @ git+https://github.com/OJWatson/metis.git"
 uv run wandb login
 ```
+
+If you installed only the library in your own project, add tracking with
+`uv add "metis-surrogate[wandb] @ git+https://github.com/OJWatson/metis.git"`.
 
 Enable tracking for the SIRDS training workflow with:
 
@@ -43,9 +52,11 @@ model files stay local unless you upload them separately.
 
 ## Tracking from Python
 
-The same tracker works with `Surrogate.fit`:
+The same tracker works with `Surrogate.fit`. This example runs in offline mode
+so the notebook needs no account. Set `mode="online"` to see your runs in W&B
+after signing in.
 
-```python
+```{python}
 from dataclasses import asdict
 from metis import load_example, Surrogate, TrainingConfig
 from metis.tracking import WandbTracker
@@ -55,6 +66,7 @@ config = TrainingConfig(steps=500, eval_every=50)
 
 with WandbTracker(
     project="sirds-surrogates",
+    mode="offline",
     config={"model": "mlp", "training": asdict(config)},
 ) as tracking:
     surrogate = Surrogate("mlp").fit(
@@ -63,6 +75,27 @@ with WandbTracker(
     )
     report = surrogate.evaluate(split.validation)
     tracking.log_evaluation(report, prefix="validation")
+```
+
+The curve below shows the losses from this run, which are also recorded in
+the local W&B log. Validation RMSE is measured in people; training and
+validation losses use scaled outputs.
+
+```{python}
+#| fig-cap: "MLP tracked with W&B offline: 500 updates on 600 full-bank SIRDS training settings, with 200 separate validation settings."
+import pandas as pd
+import matplotlib.pyplot as plt
+
+history = pd.DataFrame(surrogate.history)
+validation = history.dropna(subset=["validation_loss"])
+fig, ax = plt.subplots(figsize=(7, 3))
+ax.plot(history.step, history.train_loss, alpha=0.5, label="Training")
+ax.plot(validation.step, validation.validation_loss, "o-", label="Validation")
+ax.set(xlabel="Optimizer update", ylabel="Scaled mean squared error")
+ax.legend()
+fig.tight_layout()
+plt.show()
+print(f"Validation RMSE: {report.metrics['rmse']:.2f} people")
 ```
 
 Next, [set up a sweep](sweep-config.qmd) to compare several training runs.

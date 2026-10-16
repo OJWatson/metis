@@ -37,7 +37,7 @@ import matplotlib.pyplot as plt
 from metis.datasets.sirds import simulate_sirds
 
 parameters = dict(I0=0.005, beta=0.4, gamma=0.1, omega=0.02, mu=0.01)
-S, I, R, D = simulate_sirds(**parameters, N=1000, T=40, dt=1, seed=0)
+S, I, R, D = simulate_sirds(**parameters, N=1000, T=200, dt=1, seed=0)
 print(f"{len(S)} time points, including the initial state")
 print("Population conserved:", bool(np.all(S + I + R + D == 1000)))
 ```
@@ -59,13 +59,13 @@ to reproduce.
 #| fig-cap: "SIRDS: 20 stochastic realisations with the same inputs, a population of 1,000 and daily steps. The variation comes from the simulator's random draws."
 fig, ax = plt.subplots(figsize=(9, 4.5))
 for seed in range(20):
-    outputs = simulate_sirds(**parameters, N=1000, T=40, dt=1, seed=seed)
+    outputs = simulate_sirds(**parameters, N=1000, T=200, dt=1, seed=seed)
     for values, label, colour in zip(
         outputs,
         ["Susceptible", "Infected", "Recovered", "Dead"],
         ["#2E86AB", "#C73E1D", "#6A994E", "#C21B8A"],
     ):
-        ax.plot(np.arange(41), values, color=colour, alpha=0.35,
+        ax.plot(np.arange(201), values, color=colour, alpha=0.35,
                 label=label if seed == 0 else None)
 ax.set(xlabel="Time (days)", ylabel="People")
 ax.legend()
@@ -73,8 +73,9 @@ fig.tight_layout()
 plt.show()
 ```
 
-The bundled training bank uses this same simulator at 100 parameter settings,
-with five realisations per setting. It contains days 1–40; day zero is omitted.
+The bundled training bank is the original complete SIRDS dataset: 1,000
+parameter settings with five realisations per setting. It contains days 1–200;
+day zero is omitted.
 In the data table the initial infected fraction is named `I_0`, and the four
 outputs are `S_t`, `I_t`, `R_t` and `D_t`.
 

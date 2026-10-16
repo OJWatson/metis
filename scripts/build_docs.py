@@ -29,6 +29,17 @@ def frontmatter(text):
     return (yaml.safe_load(match[1]) or {}) if match else {}
 
 
+def check_plot_cells(source, text):
+    """Do not publish plot-generating Python as an unexecuted code listing."""
+    for match in re.finditer(r"^```(python|\{python\})\s*\n(.*?)^```", text, re.MULTILINE | re.DOTALL):
+        language, code = match.groups()
+        plots = re.search(r"\.(?:plot|hist|scatter|imshow|pairplot|subplots|show)\s*\(", code)
+        disabled = re.search(r"^#\|\s*(?:eval|include):\s*false\b", code, re.MULTILINE)
+        if plots and (language == "python" or disabled):
+            line = text[:match.start()].count("\n") + 1
+            raise ValueError(f"{source}:{line}: plot-producing code must be executed and displayed")
+
+
 def portable_markdown(text, relative):
     """Keep doc links and static illustrations usable after a notebook download."""
     folder = "" if relative.parent == Path(".") else relative.parent.as_posix() + "/"
@@ -44,6 +55,18 @@ def portable_markdown(text, relative):
 
     text = re.sub(r"(?<=\]\()([^\s)]+)(?=\))", lambda match: absolute(match[1]), text)
     text = re.sub(r'(?<=src=")([^\"]+)(?=")', lambda match: absolute(match[1]), text)
+
+    def plain_image(match):
+        caption, target, attributes = match.groups()
+        description = re.search(r'''\bfig-alt\s*=\s*(["'])(.*?)\1''', attributes)
+        alt = description[2] if description else caption
+        if description:
+            alt = re.sub(r"([\\\[\]])", r"\\\1", alt)
+        image = f"![{alt}]({target})"
+        # Quarto uses the bracket text as a visible caption; Markdown only uses it as alt text.
+        return image + (f"\n\n{caption}" if caption else "")
+
+    text = re.sub(r"!\[([^\]]*)\]\(([^)\n]+)\)\{([^}\n]*)\}", plain_image, text)
 
     def plain_div(match):
         attributes = match[1] or ""
@@ -84,7 +107,7 @@ def prepare_notebook(source, destination, *, relative, revision, setup_source):
     introductory = nbformat.v4.new_markdown_cell(
         "**Run this notebook:** in Colab, choose **Runtime → Run all**. The first cell "
         "prepares METIS automatically using uv; a fresh runtime needs this setup again. "
-        "These short tutorials use a CPU. Locally, select your "
+        "These tutorials use a CPU and the full original SIRDS bank. Locally, select your "
         f"[METIS Python environment]({SITE_URL}basics/installing_metis.html).\n\n"
         "The outputs below were generated when the documentation was built. "
         f"[Source revision `{revision[:12]}`](https://github.com/OJWatson/metis/tree/{revision})."
@@ -136,6 +159,9 @@ def build(project, *, revision=None):
         page.relative_to(project) for page in sorted(project.rglob("*.qmd"))
         if "_site" not in page.parts and frontmatter(page.read_text(encoding="utf-8")).get("metis-notebook")
     ]
+    for page in project.rglob("*.qmd"):
+        if "_site" not in page.parts:
+            check_plot_cells(page.relative_to(project), page.read_text(encoding="utf-8"))
     if not pages:
         raise ValueError("No tutorial pages declare metis-notebook: true")
     setup_source = (repository / "scripts" / "colab_setup.py").read_text(encoding="utf-8")

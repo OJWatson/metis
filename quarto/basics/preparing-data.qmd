@@ -17,7 +17,8 @@ paired with outputs (realisations). We will use the [SIRDS model](sirds-example.
 to see how these are organised, then load and split the data with METIS.
 
 ::: {.callout-tip}
-The package includes a small SIRDS bank so you can follow the whole walkthrough
+The package includes the original SIRDS bank: 1,000 parameter settings, five
+realisations per setting and 200 days. You can follow the whole walkthrough
 without running the simulator yourself. The same loading functions accept data
 from your own simulator, whether it was written in Python, R or another language.
 :::
@@ -44,7 +45,7 @@ plt.show()
 one_run[["t", "I_t"]].head()
 ```
 
-This realisation has 40 rows, one for each day. The other compartment counts
+This realisation has 200 rows, one for each day. The other compartment counts
 can be stored as additional columns on the same rows.
 
 ## Multiple SIRDS realisations
@@ -84,21 +85,18 @@ and parameters may be physically constrained. The SIRDS example samples inputs
 uniformly within specified ranges. Latin hypercube sampling is another common
 choice for spreading a limited number of simulations across the input space.
 
-The plot below shows the 100 settings already present in our bank. These are
-the same settings we will use for training, rather than another example dataset.
+The pair plot below shows all 1,000 settings in the original bank. Each panel
+shows a pair of input parameters, with their individual distributions on the
+diagonal. The same bank is used throughout the training examples.
 
 ```{python}
-#| fig-cap: "Bundled SIRDS bank: 100 parameter settings, with five stochastic realisations at each setting."
+#| fig-cap: "Original SIRDS bank: all 1,000 parameter settings, with five stochastic realisations at each setting."
+import seaborn as sns
+
 settings = df[list(example.input_names)].drop_duplicates()
-fig, axes = plt.subplots(1, 2, figsize=(9, 3.5))
-axes[0].scatter(settings.beta, settings.gamma, s=20)
-axes[0].set(xlabel="Transmission rate (beta)", ylabel="Recovery rate (gamma)")
-axes[1].scatter(settings.omega, settings.mu, c=settings.I_0, s=20, cmap="viridis")
-axes[1].set(xlabel="Waning rate (omega)", ylabel="Death rate (mu)")
-fig.colorbar(axes[1].collections[0], ax=axes[1], label="Initial infected fraction")
-fig.tight_layout()
+sns.pairplot(settings, corner=True, height=2)
 plt.show()
-print(f"{len(settings)} settings × 5 realisations × 40 days = {len(df):,} rows")
+print(f"{len(settings):,} settings × 5 realisations × 200 days = {len(df):,} rows")
 ```
 
 ## Loading the full dataset

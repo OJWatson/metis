@@ -109,16 +109,29 @@ def evaluate(
     solver="heun",
     constraints=None,
     batch_size=64,
+    reuse_samples=False,
 ):
     """Evaluate every supplied run in original units using autonomous predictions.
 
-    ``batch_size`` limits the number of runs whose samples are held in memory;
+    ``batch_size`` limits the number of contexts sampled or runs scored at once;
     it never subsamples the evaluation bank. For stochastic models the first
     batch uses ``seed`` and later seeds derive from ``(seed, batch_start)`` via
     NumPy SeedSequence. Changing batch size changes Monte Carlo draws. The
     resulting intervals are pointwise 90% predictive intervals, not simultaneous
     trajectory bands or confidence intervals for surrogate fidelity. CRPS is
     the score of the finite empirical ensemble, with denominator n_samples**2.
+
+    With ``reuse_samples=True``, stochastic models generate one ensemble per
+    exactly identical static-input and complete conditioning-trajectory context.
+    Every observed run is still scored with the same weight. Contexts are sampled
+    in first-appearance order, using the seed scheme above with the context batch
+    start instead of the run batch start. Repeated evaluations with the same data,
+    seed and batching reproduce the draws. Reuse changes finite Monte Carlo
+    estimates and shares their sampling noise across replicates: a replicate mean
+    uses n_samples draws, rather than averaging independently generated ensembles.
+    It does not make the observed replicates independent or estimate confidence
+    intervals. Ensembles are discarded after their matching runs are scored;
+    no global ensemble cache is retained. Deterministic models ignore this option.
 
     Constraints are explicit: nonnegative=[names], nondecreasing=[names],
     conserved_total={"outputs": [names], "value": number, "atol": number}.
@@ -152,6 +165,8 @@ def evaluate(
         or batch_size < 1
     ):
         raise ValueError("batch_size must be a positive integer")
+    if not isinstance(reuse_samples, bool):
+        raise ValueError("reuse_samples must be a boolean")
     stochastic = surrogate.model_name in {"flow_matching", "itarflow"}
     if stochastic:
         if (
@@ -177,11 +192,19 @@ def evaluate(
     width_sum = np.zeros(truth.shape[-1])
     crps_sum = np.zeros(truth.shape[-1])
     physical = {}
-    for start in range(0, len(truth), batch_size):
-        stop = min(start + batch_size, len(truth))
-        observed = truth[start:stop]
+    contexts = (
+        _matching_contexts(data, observed_idx) if stochastic and reuse_samples else None
+    )
+    n_generated = len(contexts) if contexts is not None else len(truth)
+    for start in range(0, n_generated, batch_size):
+        stop = min(start + batch_size, n_generated)
+        source_rows = (
+            np.array([rows[0] for rows in contexts[start:stop]])
+            if contexts is not None
+            else slice(start, stop)
+        )
         conditioning = (
-            {"conditioning": data.outputs[start:stop, :, observed_idx]}
+            {"conditioning": data.outputs[source_rows][:, :, observed_idx]}
             if observed_names
             else {}
         )
@@ -199,7 +222,7 @@ def evaluate(
             )
             values = np.asarray(
                 surrogate.sample(
-                    data.inputs[start:stop],
+                    data.inputs[source_rows],
                     n_samples=n_samples,
                     seed=batch_seed,
                     num_steps=num_steps,
@@ -213,38 +236,55 @@ def evaluate(
                 raise ValueError(
                     f"Generated samples must be finite and have shape {expected}"
                 )
-            prediction[start:stop] = values.mean(axis=1)
-            lo, hi = np.quantile(values, [0.05, 0.95], axis=1)
-            lower[start:stop], upper[start:stop] = lo, hi
-            coverage_sum += ((observed >= lo) & (observed <= hi)).sum(axis=(0, 1))
-            width_sum += (hi - lo).sum(axis=(0, 1))
-            # Empirical CRPS = E|X-y| - .5 E|X-X'|. Sorting avoids an S x S
-            # sample-pair tensor and keeps memory linear in ensemble size.
-            ordered = np.sort(values, axis=1)
-            k = np.arange(1, n_samples, dtype=float)
-            # Adjacent spacings avoid cancellation from a large common offset
-            # in the original output units.
-            pair_term = (
-                (k * (n_samples - k))[None, :, None, None] * np.diff(ordered, axis=1)
-            ).sum(axis=1) / n_samples**2
-            crps = np.abs(values - observed[:, None]).mean(axis=1) - pair_term
-            crps_sum += crps.sum(axis=(0, 1))
         else:
             values = np.asarray(
-                surrogate.predict(data.inputs[start:stop], **conditioning),
+                surrogate.predict(data.inputs[source_rows], **conditioning),
                 dtype=np.float64,
             )
-            if values.shape != observed.shape or not np.isfinite(values).all():
+            if (
+                values.shape != truth[source_rows].shape
+                or not np.isfinite(values).all()
+            ):
                 raise ValueError("Predictions have invalid shape or non-finite values")
-            prediction[start:stop] = values
-        # Every batch has the same time grid, outputs, and sample count, so run
-        # counts provide exact weights for aggregating violation fractions.
-        for name, fraction in _check_constraints(
-            values, output_names, specification
-        ).items():
-            physical[name] = physical.get(name, 0.0) + fraction * (stop - start) / len(
-                truth
-            )
+        score_batches = (
+            _reused_score_batches(values, contexts[start:stop], batch_size)
+            if contexts is not None
+            else [(values, source_rows)]
+        )
+        for samples, rows in score_batches:
+            observed = truth[rows]
+            if stochastic:
+                assert lower is not None and upper is not None
+                prediction[rows] = samples.mean(axis=1)
+                lo, hi = np.quantile(samples, [0.05, 0.95], axis=1)
+                lower[rows], upper[rows] = lo, hi
+                coverage_sum += ((observed >= lo) & (observed <= hi)).sum(axis=(0, 1))
+                # A reused ensemble represents every matching observed run.
+                width_sum += (hi - lo).sum(axis=(0, 1)) * (
+                    len(observed) if contexts is not None else 1
+                )
+                # Empirical CRPS = E|X-y| - .5 E|X-X'|. Sorting avoids an S x S
+                # sample-pair tensor and keeps memory linear in ensemble size.
+                ordered = np.sort(samples, axis=1)
+                k = np.arange(1, n_samples, dtype=float)
+                # Adjacent spacings avoid cancellation from a large common offset
+                # in the original output units.
+                pair_term = (
+                    (k * (n_samples - k))[None, :, None, None]
+                    * np.diff(ordered, axis=1)
+                ).sum(axis=1) / n_samples**2
+                crps = np.abs(samples - observed[:, None]).mean(axis=1) - pair_term
+                crps_sum += crps.sum(axis=(0, 1))
+            else:
+                prediction[rows] = samples
+            # Time grid, outputs and sample count are fixed; observed-run counts
+            # preserve the original weighting even with unequal replicate counts.
+            for name, fraction in _check_constraints(
+                samples, output_names, specification
+            ).items():
+                physical[name] = physical.get(name, 0.0) + fraction * len(
+                    observed
+                ) / len(truth)
     error = prediction - truth
     output_rmse = np.sqrt(np.mean(error**2, axis=(0, 1)))
     output_mae = np.mean(np.abs(error), axis=(0, 1))
@@ -349,6 +389,17 @@ def evaluate(
         "n_samples": n_samples if stochastic else None,
         "seed": seed if stochastic else None,
         "batch_size": batch_size,
+        "reuse_samples": reuse_samples,
+        "sample_reuse_policy": (
+            "one ensemble per exactly identical static-input and complete conditioning-trajectory context"
+            if reuse_samples
+            else "separate ensemble per observed run"
+        )
+        if stochastic
+        else "not applicable: deterministic predictions; reuse_samples is ignored",
+        "n_unique_contexts": len(contexts) if contexts is not None else None,
+        "n_generated_ensembles": n_generated if stochastic else None,
+        "n_generated_trajectories": n_generated * n_samples if stochastic else None,
         "inference_batch_size": getattr(
             getattr(surrogate, "training_config", None), "batch_size", None
         ),
@@ -358,7 +409,11 @@ def evaluate(
         "sampling_chunk_note": "Changing evaluation or internal inference batch size may change seeded Monte Carlo draws"
         if stochastic
         else None,
-        "sampling_seed_scheme": "first batch: seed; subsequent batches: SeedSequence([seed, start]) uint64 modulo 2**63"
+        "sampling_seed_scheme": (
+            "first batch: seed; subsequent batches: SeedSequence([seed, start]) uint64 modulo 2**63; start counts contexts in first-appearance order"
+            if reuse_samples
+            else "first batch: seed; subsequent batches: SeedSequence([seed, start]) uint64 modulo 2**63"
+        )
         if stochastic
         else None,
         "flow_steps": num_steps if surrogate.model_name == "flow_matching" else None,
@@ -385,6 +440,45 @@ def evaluate(
         lower,
         upper,
     )
+
+
+def _matching_contexts(data, observed_idx):
+    """Group exact contexts using indices, never retaining generated ensembles.
+
+    Hashing bounds key storage for long conditioning paths. Candidate matches
+    are checked for exact equality, so a hash collision cannot merge contexts.
+    Signed zeros compare equal and are canonicalised before hashing.
+    """
+    groups = []
+    lookup = {}
+    for row, inputs in enumerate(data.inputs):
+        conditioning = data.outputs[row][:, observed_idx] if observed_idx else None
+        if conditioning is not None:
+            canonical = conditioning.copy()
+            canonical[canonical == 0] = 0
+            digest = hashlib.sha256(canonical.tobytes()).digest()
+        else:
+            digest = None
+        key = (tuple(inputs), digest)
+        candidates = lookup.setdefault(key, [])
+        for group in candidates:
+            first = groups[group][0]
+            if conditioning is None or np.array_equal(
+                conditioning, data.outputs[first][:, observed_idx]
+            ):
+                groups[group].append(row)
+                break
+        else:
+            candidates.append(len(groups))
+            groups.append([row])
+    return groups
+
+
+def _reused_score_batches(values, contexts, batch_size):
+    """Broadcast one ensemble against at most batch_size observed replicates."""
+    for context, rows in enumerate(contexts):
+        for start in range(0, len(rows), batch_size):
+            yield values[context : context + 1], rows[start : start + batch_size]
 
 
 def _plain_provenance(value):
