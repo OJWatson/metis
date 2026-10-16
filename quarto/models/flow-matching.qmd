@@ -80,9 +80,11 @@ uv run metis train model=flow_matching model.model_options.embd_dim=128 evaluati
 
 ## Training on SIRDS
 
-We use the same [SIRDS simulations](../basics/sirds-example.qmd) and grouped
-train/validation/test split as the [training tutorial](../basics/training.qmd).
-This small CPU fit uses 1,000 optimizer steps.
+We use the full [SIRDS bank](../basics/sirds-example.qmd): 1,000 parameter
+settings, five realisations per setting and all 200 daily outputs. The grouped
+split matches the [training tutorial](../basics/training.qmd): 600 settings for
+training, 200 for validation and 200 for testing. This CPU fit uses 1,000
+optimizer steps.
 
 ```{python}
 import numpy as np
@@ -106,7 +108,7 @@ model = Surrogate(
 ```{python}
 #| code-fold: true
 #| code-summary: "Plot training and validation loss"
-#| fig-cap: "Flow matching: training and validation loss for the bundled SIRDS bank."
+#| fig-cap: "Flow matching: loss on the full SIRDS bank: 600 training settings and 200 validation settings."
 validation = [row for row in model.history if "validation_loss" in row]
 fig, ax = plt.subplots(figsize=(6, 3))
 ax.plot([row["step"] for row in model.history],
@@ -132,7 +134,7 @@ print("Samples × times × outputs:", draws.shape)
 ```{python}
 #| code-fold: true
 #| code-summary: "Compare surrogate samples with SIRDS simulations"
-#| fig-cap: "Flow matching: generated trajectories and five SIRDS simulations at the first held-out parameter setting. Shading spans the pointwise 5th–95th percentiles of 100 surrogate draws, after fitting the bundled SIRDS training split."
+#| fig-cap: "Flow matching: generated trajectories and five SIRDS simulations at the first held-out parameter setting. Shading spans the pointwise 5th–95th percentiles of 100 surrogate draws, after fitting 600 settings from the full 200-day SIRDS bank."
 same_inputs = np.all(split.test.inputs == inputs[0], axis=1)
 replicates = split.test.outputs[same_inputs]
 low, high = np.quantile(draws, [0.05, 0.95], axis=0)

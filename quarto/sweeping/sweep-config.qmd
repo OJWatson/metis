@@ -1,5 +1,12 @@
 ---
 title: "METIS sweep config"
+jupyter: python3
+metis-notebook: true
+format:
+  html: default
+  ipynb: default
+execute:
+  eval: true
 ---
 
 ## Walkthrough: sweeping on SIRDS
@@ -106,5 +113,48 @@ selected model on the held-out test set.
 For a small local grid without W&B, the same installed workflow also supports:
 
 ```bash
-uv run metis train --multirun training.learning_rate=0.001,0.0003 evaluation.partition=validation
+uv run metis train --multirun training.learning_rate=0.001,0.0003 training.steps=1000 training.batch_size=64 training.eval_every=100 evaluation.partition=validation
 ```
+
+Here is the result of running that two-rate grid for 1,000 updates per run on
+the full SIRDS bank. Each run uses the same 600 training and 200 validation
+settings. The test set is not used to choose the learning rate.
+
+```{python}
+#| code-fold: true
+#| code-summary: "Run the Hydra grid and read its saved validation metrics"
+import json
+from pathlib import Path
+import subprocess
+import sys
+import pandas as pd
+import matplotlib.pyplot as plt
+
+sweep_directory = Path("sirds-learning-rate-sweep").resolve()
+subprocess.run(
+    [sys.executable, "-m", "metis.hydra_app", "--multirun",
+     "training.learning_rate=0.001,0.0003", "training.steps=1000",
+     "training.batch_size=64", "training.eval_every=100",
+     "evaluation.partition=validation", f"hydra.sweep.dir={sweep_directory}"],
+    check=True, capture_output=True, text=True,
+)
+results = []
+for index, rate in enumerate([0.001, 0.0003]):
+    saved = json.loads((sweep_directory / str(index) / "metrics.json").read_text())
+    results.append({"Learning rate": rate, "Validation RMSE (people)": saved["metrics"]["rmse"]})
+results = pd.DataFrame(results)
+results
+```
+
+```{python}
+#| fig-cap: "MLP learning-rate grid: each model fitted to the same 600 full-bank SIRDS training settings and evaluated on 200 validation settings after 1,000 updates."
+fig, ax = plt.subplots(figsize=(6, 3))
+ax.bar(results["Learning rate"].astype(str), results["Validation RMSE (people)"])
+ax.set(xlabel="Learning rate", ylabel="Validation RMSE (people)")
+fig.tight_layout()
+plt.show()
+```
+
+This is a two-run demonstration of the sweep workflow, not an exhaustive
+hyperparameter search. A W&B sweep collects the same validation metric while
+choosing configurations using its search strategy.

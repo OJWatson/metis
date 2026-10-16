@@ -19,9 +19,10 @@ continuing a fit.
 
 ## Saving a fitted surrogate
 
-This page uses the MLP from the [training walkthrough](training.qmd). To make
-the notebook runnable on its own, the setup below repeats that short SIRDS fit
-if the saved model is not already present.
+This page uses the MLP from the [training walkthrough](training.qmd), fitted
+on the full original SIRDS bank with 1,000 parameter settings, five realisations
+each and 200 daily outputs. To make the notebook runnable on its own, the setup
+below repeats that short fit if a matching saved model is not already present.
 
 ```{python}
 #| code-fold: true
@@ -34,9 +35,9 @@ from metis import Surrogate, TrainingConfig, load_example
 
 bank = load_example()
 split = bank.split(seed=42)
-if Path("sirds_surrogate.pt").exists():
-    model = Surrogate.load("sirds_surrogate.pt")
-else:
+model = Surrogate.load("sirds_surrogate.pt") if Path("sirds_surrogate.pt").exists() else None
+if (model is None or model.model_name != "mlp"
+        or model.training_metadata.get("training_fingerprint") != split.train.fingerprint):
     model = Surrogate("mlp").fit(
         split.train, split.validation,
         config=TrainingConfig(steps=1000, batch_size=64, eval_every=100, seed=42),

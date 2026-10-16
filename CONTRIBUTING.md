@@ -16,9 +16,8 @@ uv build
 ~~~
 
 The default development group includes the documentation and notebook tools,
-so plain `uv sync` and `uv run` are sufficient. For W&B, use `uv sync --extra wandb`
-and retain `--extra wandb` on subsequent `uv run` commands. CI uses `--all-extras`
-to test every optional dependency. `--locked` additionally checks that
+so plain `uv sync` and `uv run` are sufficient, including W&B tracking and the
+Pyro inference example. CI uses `--all-extras` to test every optional dependency. `--locked` additionally checks that
 `pyproject.toml` agrees with the committed `uv.lock`.
 
 The checkout selects PyTorch's explicit CPU index on Linux and Windows, and the
