@@ -3,15 +3,19 @@
 from importlib.resources import as_file, files
 
 
-def load_example():
-    """Return 100 SIRDS parameter groups, five replicates and 40 timepoints.
+def load_example(*, small=False):
+    """Load the original SIRDS bank: 1,000 settings, five replicates, 200 days.
 
-    The subset is for tutorials and installation checks. It is not evidence
-    that a surrogate trained on it is adequate for a scientific application.
+    The complete bank is bundled with the installed package. Use ``small=True``
+    only for a fast installation check or test fixture: this selects the
+    packaged 100-setting, 40-day subset, retaining all five replicates.
     """
     from metis.data import SimulationDataset
 
-    with as_file(files("metis.datasets").joinpath("sirds_small.parquet")) as path:
+    if not isinstance(small, bool):
+        raise TypeError("small must be a boolean")
+    resource = "sirds_small.parquet" if small else "sirds.parquet"
+    with as_file(files("metis.datasets").joinpath(resource)) as path:
         return SimulationDataset.from_parquet(
             path,
             inputs=["I_0", "beta", "gamma", "omega", "mu"],

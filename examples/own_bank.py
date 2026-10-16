@@ -17,9 +17,9 @@ INPUTS = ["I_0", "beta", "gamma", "omega", "mu"]
 OUTPUTS = ["S_t", "I_t", "R_t", "D_t"]
 
 
-def make_bank(path):
-    """Write the same 100 SIRDS settings × five realizations × 40 days as the docs."""
-    bank = load_example()
+def make_bank(path, *, small=False):
+    """Export the original SIRDS bank, or its explicit small smoke-test subset."""
+    bank = load_example(small=small)
     frames = []
     for inputs, outputs, rep in zip(bank.inputs, bank.outputs, bank.replicate_ids):
         frames.append(pl.DataFrame({
@@ -38,11 +38,12 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, default=Path("own-bank"))
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument("--make-bank-only", action="store_true")
+    parser.add_argument("--small", action="store_true", help="Use the small installation-check subset")
     args = parser.parse_args(argv)
     args.output.mkdir(parents=True, exist_ok=True)
     csv_path = args.csv or args.output / "bank.csv"
     if args.csv is None:
-        make_bank(csv_path)
+        make_bank(csv_path, small=args.small)
     frame = pl.read_csv(csv_path)
     bank = SimulationDataset.from_frame(frame, inputs=INPUTS, outputs=OUTPUTS)
     frame.write_parquet(args.output / "bank.parquet")

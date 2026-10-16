@@ -3,108 +3,70 @@ title: "Installing METIS"
 ---
 
 METIS is a Python package. We use [uv](https://docs.astral.sh/uv/) to install it
-and manage the dependencies in your own project.
+and manage its dependencies.
 
-## Installation
+## Installation with uv
 
-1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and
-   [Git](https://git-scm.com/downloads).
-
-2. Create a project for your surrogate work:
-
-   ```bash
-   uv init my-surrogate --python 3.13
-   cd my-surrogate
-   ```
-
-3. Choose a PyTorch build. For CPU training on **Linux or Windows**:
-
-   ```bash
-   uv add "torch>=2.10,<3" --index pytorch-cpu=https://download.pytorch.org/whl/cpu
-   ```
-
-   In `pyproject.toml`, add `explicit = true` to the index entry so only PyTorch
-   uses this index:
-
-   ```toml
-   [[tool.uv.index]]
-   name = "pytorch-cpu"
-   url = "https://download.pytorch.org/whl/cpu"
-   explicit = true
-   ```
-
-   On **Apple Silicon macOS**, use `uv add "torch>=2.10,<3"` instead. The current
-   PyTorch range does not support Intel Macs.
-
-4. Install METIS with the dependencies used in these tutorials:
-
-   ```bash
-   uv add "metis-surrogate[docs] @ git+https://github.com/OJWatson/metis.git"
-   ```
-
-5. Check the installation with a short fit on the bundled SIRDS data:
-
-   ```bash
-   uv run metis demo --steps 100 --output metis-demo
-   ```
-
-   This saves a surrogate, metrics and predictions in `metis-demo/`.
-
-Run your scripts with `uv run python your_script.py`. uv manages the environment
-in `.venv`; there is no need to activate it manually. Keep `pyproject.toml` and
-`uv.lock` with your project so the environment can be recreated.
-
-::: {.callout-note}
-The distribution is **metis-surrogate**, imported in Python as **metis**. It is
-not yet on PyPI; the PyPI package named `metis` is unrelated. Python 3.11+ is
-supported. `[docs]` includes notebook and plotting dependencies; for a smaller
-installation, use `[plots]` or omit the extra entirely. Add `[wandb]` when using
-Weights & Biases.
-:::
-
-## Running the tutorial notebooks
-
-Each worked example shows its executed outputs. Under **Other Formats**, choose
-**Jupyter** to download it. To run downloaded notebooks in your project:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and
+[Git](https://git-scm.com/downloads), then:
 
 ```bash
-uv add --dev jupyterlab
+git clone https://github.com/OJWatson/metis.git
+cd metis
+uv sync
+```
+
+That's it. uv installs Python, METIS and the dependencies for the walkthrough,
+including plotting and JupyterLab. The checkout already selects a CPU-compatible
+PyTorch build, so there is no PyTorch configuration to edit.
+
+Check the installation with:
+
+```bash
+uv run metis demo --steps 100
+```
+
+This short installation check saves a model and predictions in `metis-demo/`.
+It uses an explicitly reduced SIRDS subset; the walkthrough uses the full bank.
+Run Python scripts with `uv run python your_script.py`.
+
+## Using METIS in your own project
+
+You can also install METIS as a dependency without cloning its repository.
+Inside an existing uv project, run:
+
+```bash
+uv add "metis-surrogate[docs] @ git+https://github.com/OJWatson/metis.git"
+```
+
+For a new project, first run `uv init my-surrogate --python 3.13` and
+`cd my-surrogate`. Then use the command above. Future installations of your
+project only need `uv sync`; keep `pyproject.toml` and `uv.lock` with your work.
+
+`[docs]` includes the notebook and plotting tools used here. Omit it if you only
+need the library. The distribution is **metis-surrogate**, imported as **metis**;
+it is not yet on PyPI. The PyPI package named `metis` is unrelated.
+
+## Running the notebooks
+
+Each worked example shows its executed outputs. Under **Other Formats**, choose
+**Jupyter** to download it, then open it with:
+
+```bash
 uv run jupyter lab
 ```
 
-Open the notebook in JupyterLab and choose **Run all**. If using another notebook
-editor, select your project's `.venv` Python kernel.
+Alternatively, choose **Open in Colab**, then **Runtime → Run all**. Its first
+cell gets the matching METIS revision and runs `uv sync` in the notebook
+interpreter, keeping Colab's unrelated packages. A new runtime needs setup
+again. Colab sometimes preloads libraries: if it reports a version conflict or
+requests a restart, restart once and run all cells again.
 
-Alternatively, choose **Open in Colab**, then **Runtime → Run all**. A shared
-setup cell installs the matching METIS revision and dependencies using uv;
-you do not need to write installation commands. The examples run on CPU.
-Colab runtimes are temporary, so a new runtime needs setup again. If setup asks
-for a session restart because a library was already loaded, restart once and
-run all cells again.
-
-## Optional CUDA setup
-
-For an NVIDIA GPU, select a compatible build using the
-[uv PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/).
-For example, for CUDA 12.8:
-
-```bash
-uv add "torch>=2.10,<3" --index pytorch-cu128=https://download.pytorch.org/whl/cu128
-```
-
-Set `explicit = true` on this index as above, then check the installation:
-
-```bash
-uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
-```
-
-Use `TrainingConfig(device="cuda")` in Python, or
-`uv run metis train training.device=cuda` with Hydra. The PyTorch installation
-does not install or update your NVIDIA driver.
-
-::: {.callout-tip}
-To develop METIS itself, follow the [contributor guide](https://github.com/OJWatson/metis/blob/main/CONTRIBUTING.md)
-for cloning the repository, running tests and building the documentation.
+::: {.callout-note}
+The tutorials run on CPU. For NVIDIA GPUs or a smaller CPU-only installation
+in your own project, see the [optional PyTorch setup](https://github.com/OJWatson/metis/blob/main/CONTRIBUTING.md#optional-pytorch-setup).
+Python 3.11+ and Linux, Windows or Apple Silicon macOS are supported; the current
+PyTorch dependency range does not support Intel Macs.
 :::
 
 Next, see how to configure experiments in the [Hydra crash course](hydra.qmd).

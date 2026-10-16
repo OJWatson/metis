@@ -39,9 +39,9 @@ jobs:
           cd "$RUNNER_TEMP/metis-wheel-check"
           uv add torch==2.10.0 --index pytorch-cpu=https://download.pytorch.org/whl/cpu
           uv add "$GITHUB_WORKSPACE"/dist/*.whl
-          uv run --locked python -c "from pathlib import Path; import metis, torch; from metis import load_example; assert Path(metis.__file__).is_relative_to(Path.cwd() / '.venv'); assert torch.version.cuda is None; assert load_example().inputs.shape[0] == 500"
+          uv run --locked python -c "from pathlib import Path; import metis, torch; from metis import load_example; assert Path(metis.__file__).is_relative_to(Path.cwd() / '.venv'); assert torch.version.cuda is None; full=load_example(); assert full.inputs.shape == (5000, 5) and full.outputs.shape == (5000, 200, 4); assert load_example(small=True).outputs.shape == (500, 40, 4)"
           uv run --locked metis demo --steps 10 --output "$RUNNER_TEMP/metis-wheel-demo"
-          uv run --locked metis-train training.steps=1 training.batch_size=4 training.eval_every=1 model.model_options.hidden_dim=8 hydra.run.dir="$RUNNER_TEMP/metis-wheel-hydra"
+          uv run --locked metis-train dataset.small=true training.steps=1 training.batch_size=4 training.eval_every=1 model.model_options.hidden_dim=8 hydra.run.dir="$RUNNER_TEMP/metis-wheel-hydra"
           uv run --locked python -c "import os; from pathlib import Path; from metis import Surrogate; assert Surrogate.load(Path(os.environ['RUNNER_TEMP']) / 'metis-wheel-hydra/model.pt').model_name == 'mlp'"
       - name: Fresh researcher project acceptance
         if: matrix.python == '3.13'
@@ -70,4 +70,4 @@ jobs:
       - name: Public API and Hydra on desktop platforms
         run: uv run --locked --all-extras python -m pytest -q tests/test_surrogate_api.py tests/test_conditioning_api.py tests/test_hydra_api.py tests/test_preprocessing.py tests/test_migration.py
       - name: SIRDS researcher workflow
-        run: uv run --locked --all-extras python examples/own_bank.py --steps 5
+        run: uv run --locked --all-extras python examples/own_bank.py --small --steps 5

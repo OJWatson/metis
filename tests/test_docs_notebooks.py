@@ -3,7 +3,6 @@
 import importlib.util
 from pathlib import Path
 import sys
-from types import SimpleNamespace
 
 import pytest
 
@@ -116,53 +115,59 @@ def test_colab_link_follows_jupyter_download(tmp_path):
 
 def test_colab_setup_does_not_mutate_a_local_environment(monkeypatch):
     setup = load_script("colab_setup")
-    monkeypatch.setattr(setup.importlib.util, "find_spec", lambda name: None)
-    monkeypatch.setattr(setup, "_installed_version", lambda name: "0.3.0")
-    monkeypatch.setattr(setup.subprocess, "run", lambda *args, **kwargs: pytest.fail("must not install locally"))
-    setup.prepare_colab("a" * 40)
-
-
-def test_local_colab_package_alone_does_not_enable_installation(monkeypatch):
-    setup = load_script("colab_setup")
-    monkeypatch.setattr(setup.importlib.util, "find_spec", lambda name: object())
     monkeypatch.delenv("COLAB_RELEASE_TAG", raising=False)
     monkeypatch.delenv("COLAB_BACKEND_VERSION", raising=False)
-    monkeypatch.setattr(setup, "_installed_version", lambda name: "0.3.0")
     monkeypatch.setattr(setup.subprocess, "run", lambda *args, **kwargs: pytest.fail("must not install locally"))
     setup.prepare_colab("a" * 40)
 
 
-def test_colab_setup_preserves_compatible_binary_versions(monkeypatch):
+def test_colab_sync_uses_current_interpreter_and_keeps_unrelated_packages(monkeypatch):
     setup = load_script("colab_setup")
-    monkeypatch.setattr(setup, "_installed_version", lambda name: {"numpy": "2.2.4", "pandas": "2.0.0"}.get(name))
-    source = setup._project_text("a" * 40)
-    assert "numpy==2.2.4" in source
-    assert "pandas==2.0.0" not in source
-    assert "torch==2.10.0" in source
-    assert "a" * 40 in source
-
-
-def test_colab_setup_retains_runtime_packages_and_requires_restart_if_loaded_library_changes(tmp_path, monkeypatch):
-    setup = load_script("colab_setup")
-    installed = {"numpy": "1.26.4", "metis-surrogate": "0.3.0"}
-    monkeypatch.setattr(setup.importlib.util, "find_spec", lambda name: object())
     monkeypatch.setenv("COLAB_RELEASE_TAG", "test-colab-runtime")
-    monkeypatch.setattr(setup, "Path", lambda value: tmp_path)
-    monkeypatch.setattr(setup, "_uv_executable", lambda directory: "uv")
-    monkeypatch.setattr(setup, "_installed_version", installed.get)
-    monkeypatch.setattr(setup, "_metis_origin", lambda: None)
-    monkeypatch.setitem(sys.modules, "numpy", SimpleNamespace(__version__="1.26.4"))
+    calls = []
+    monkeypatch.setattr(setup.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    setup.prepare_colab("a" * 40)
+    command = calls[0][0][0]
+    assert command[:2] == ["bash", "-c"]
+    script = command[2]
+    assert "uv sync" in script
+    assert "--inexact" in script
+    assert "--locked" in script
+    assert "--no-editable" in script
+    assert "--extra docs" in script
+    assert setup.shlex.quote(sys.executable) in script
+    assert "checkout -q --detach " + "a" * 40 in script
+    assert calls[0][1]["env"]["UV_PROJECT_ENVIRONMENT"] == sys.prefix
+    assert calls[0][1]["check"] is True
 
-    def install(command, **kwargs):
-        assert "--inexact" in command
-        assert kwargs["env"]["UV_PROJECT_ENVIRONMENT"] == sys.prefix
-        assert command[-1] == sys.executable
-        installed["numpy"] = "2.2.4"
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(setup.subprocess, "run", install)
-    with pytest.raises(RuntimeError, match="Restart session"):
-        setup.prepare_colab("a" * 40)
-    # Merely rerunning setup must not mistake the new files for a fresh import.
-    with pytest.raises(RuntimeError, match="Restart session"):
-        setup.prepare_colab("a" * 40)
+def test_colab_setup_rejects_non_revision_input(monkeypatch):
+    setup = load_script("colab_setup")
+    monkeypatch.setenv("COLAB_RELEASE_TAG", "test-colab-runtime")
+    monkeypatch.setattr(setup.subprocess, "run", lambda *args, **kwargs: pytest.fail("must reject before shell"))
+    with pytest.raises(ValueError, match="source revision"):
+        setup.prepare_colab("main; echo should-not-execute")
+
+
+def test_build_rejects_unexecuted_plot_listings():
+    builder = load_script("build_docs")
+    for block in [
+        '```python\nplt.plot(x)\n```',
+        '```{python}\n#| eval: false\nplt.plot(x)\n```',
+        '```{python}\n#| include: false\nplt.plot(x)\n```',
+    ]:
+        with pytest.raises(ValueError, match="plot-producing code"):
+            builder.check_plot_cells("tutorial.qmd", block)
+    builder.check_plot_cells("tutorial.qmd", '```{python}\nplt.plot(x)\n```')
+    builder.check_plot_cells("reference.qmd", '```python\nmodel = Surrogate("mlp")\n```')
+
+
+def test_each_captioned_figure_must_have_its_own_output(tmp_path):
+    path = saved_notebook(tmp_path)
+    notebook = nbformat.read(path, as_version=4)
+    notebook.cells.append(nbformat.v4.new_code_cell(
+        '#| fig-cap: "Missing result"\nplt.plot(x)', execution_count=2,
+    ))
+    nbformat.write(notebook, path)
+    with pytest.raises(ValueError, match="captioned figure missing"):
+        load_script("check_tutorial_notebook").inspect(path)

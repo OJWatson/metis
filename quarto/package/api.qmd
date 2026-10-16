@@ -167,7 +167,7 @@ and optional `conditioning_scaler` contain the means, scales and constant masks.
 
 ## Other modules
 
-- `load_example()` loads the bundled 100-group, 40-timepoint SIRDS subset.
+- `load_example()` loads the original SIRDS bank: 1,000 parameter settings, five realisations per setting and 200 daily time points. `load_example(small=True)` explicitly selects the 100-setting, 40-day subset used for installation checks.
 - `assess_coverage(training, candidates)` reports marginal bounds and distance
   to existing inputs; `suggest_simulations(training, candidates, n=10)` selects
   a geometric coverage design from supplied valid candidates. Neither estimates

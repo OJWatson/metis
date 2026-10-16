@@ -44,8 +44,12 @@ def main(argv=None):
         run("uv", "run", "--locked", "python", "-c",
             "import metis; from pathlib import Path; "
             "assert Path(metis.__file__).resolve().is_relative_to(Path('.venv').resolve()), metis.__file__")
+        run("uv", "run", "--locked", "python", "-c",
+            "from metis import load_example; "
+            "bank=load_example(); "
+            "assert bank.inputs.shape == (5000,5) and bank.outputs.shape == (5000,200,4)")
         shutil.copy2(example, project / "own_bank.py")
-        run("uv", "run", "--locked", "python", "own_bank.py", "--make-bank-only")
+        run("uv", "run", "--locked", "python", "own_bank.py", "--make-bank-only", "--small")
         run("uv", "run", "--locked", "metis", "inspect-data", "own-bank/bank.parquet",
             "--inputs", "I_0", "beta", "gamma", "omega", "mu",
             "--outputs", "S_t", "I_t", "R_t", "D_t")
@@ -74,7 +78,7 @@ def main(argv=None):
             "from metis import Surrogate, load_example; import numpy as np; "
             "a=Surrogate.load('conditioned-fit/model.pt'); "
             "b=Surrogate.load('conditioned-resume/model.pt'); "
-            "data=load_example().split(seed=42).test; "
+            "data=load_example(small=True).split(seed=42).test; "
             "x=data.inputs[:1]; c=data.outputs[:1,:,-1:]; "
             "p=a.predict(x,conditioning=c); "
             "assert p.shape == (1,40,3) and np.isfinite(p).all(); "

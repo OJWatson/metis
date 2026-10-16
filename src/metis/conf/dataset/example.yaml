@@ -1,2 +1,3 @@
-# A packaged SIRDS subset for tutorials and installation checks.
+# The complete original SIRDS bank, bundled with the package.
 _target_: metis.load_example
+small: false

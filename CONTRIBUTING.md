@@ -8,26 +8,26 @@ and optional dependencies in `.venv`; no manual activation is needed.
 ~~~bash
 git clone https://github.com/OJWatson/metis.git
 cd metis
-uv sync --locked --all-extras
-uv run --locked --all-extras python -m pytest
-uv run --locked --all-extras ruff check src tests
-uv run --locked --all-extras ty check src
+uv sync
+uv run python -m pytest
+uv run ruff check src tests
+uv run ty check src
 uv build
 ~~~
 
-Keep `--all-extras` on checkout `uv run` commands so synchronization retains the
-notebook, plotting, tracking and pandas dependencies. `--locked` checks
-that `pyproject.toml` agrees with the committed `uv.lock` instead of silently
-changing the resolution. The development dependency group is included by default.
+The default development group includes the documentation and notebook tools,
+so plain `uv sync` and `uv run` are sufficient. For W&B, use `uv sync --extra wandb`
+and retain `--extra wandb` on subsequent `uv run` commands. CI uses `--all-extras`
+to test every optional dependency. `--locked` additionally checks that
+`pyproject.toml` agrees with the committed `uv.lock`.
 
 The checkout selects PyTorch's explicit CPU index on Linux and Windows, and the
 platform build from PyPI on Apple Silicon macOS. Intel Macs are unsupported by
 the current PyTorch dependency range. CPU CI also tests a built wheel outside the
 checkout. The committed lockfile records a development resolution, not a promise
-that every GPU/driver combination has been tested. For CUDA, follow the
-[named-index setup](https://ojwatson.github.io/metis/basics/installing_metis.html#optional-cuda-setup)
-to change your local torch source and lockfile, then run
-`uv sync --locked --all-extras` again. The shared training engine supports CPU or CUDA.
+that every GPU/driver combination has been tested. See [optional PyTorch setup](#optional-pytorch-setup) for CUDA or CPU-only
+installation in a separate research project. The shared training engine supports
+CPU or CUDA.
 
 Keep source under `src/metis` and import `metis`. Root compatibility modules
 and the former source trainer have been retired; use the installed entry points.
@@ -49,17 +49,21 @@ uv run --locked --all-extras python scripts/check_tutorial_notebook.py quarto/_s
 
 The build executes every tutorial in a temporary copy of the documentation,
 then exports notebooks with their plots and results. It fails on execution
-errors, unexecuted cells or missing figures. Notebook tutorials declare
+errors, unexecuted cells or missing figures. Plot-producing Python must use
+executable `{python}` cells; a captioned figure must have a saved image output. Notebook tutorials declare
 `metis-notebook: true` and both `html` and `ipynb` formats; reference pages
-remain HTML only. Keep examples self-contained, CPU-friendly and free of
+remain HTML only. Keep examples self-contained, runnable on CPU and free of
 external accounts or private data. Use `{python}` cells for runnable code.
-Use SIRDS throughout, with the bundled bank and the same grouped split. Extend
+Use the full original SIRDS bank throughout (1,000 settings × five realisations
+× 200 days), with the same grouped split. Reserve `load_example(small=True)`
+for explicitly labelled smoke tests. Extend
 the original walkthrough where a topic belongs instead of adding a competing
 quickstart or another example data-generating process.
 
-A shared setup cell is added to downloads for Colab; do not repeat installation
-commands in tutorial sources. Every notebook records the source commit and
-installs that revision. CI publishes executed notebooks to the `notebooks`
+A short shared setup cell is added to downloads for Colab; do not repeat
+installation commands in tutorial sources. It checks out the recorded source
+commit and runs `uv sync --locked --inexact` against the notebook interpreter.
+Every notebook therefore installs the revision that produced its saved outputs. CI publishes executed notebooks to the `notebooks`
 branch and deploys the website only after a successful main-branch build.
 To rerun one exported notebook from a fresh directory:
 
@@ -89,3 +93,37 @@ Validate advertised CUDA hardware separately with
 `uv run --locked --all-extras python scripts/check_hardware.py --device cuda --num-devices 2`.
 Use the actual device count; retain the generated report with release evidence.
 CPU CI is not a substitute for this check.
+
+## Optional PyTorch setup
+
+The checkout already uses the CPU index on Linux and Windows. In a separate
+research project, `uv add` uses PyPI's platform build by default; on Linux this
+includes CUDA libraries and can be a much larger download. A CPU-only build
+can be selected explicitly:
+
+```bash
+uv add "torch>=2.10,<3" --index pytorch-cpu=https://download.pytorch.org/whl/cpu
+```
+
+For an NVIDIA GPU, choose a build compatible with your driver using the
+[uv PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/).
+For example, CUDA 12.8:
+
+```bash
+uv add "torch>=2.10,<3" --index pytorch-cu128=https://download.pytorch.org/whl/cu128
+```
+
+For either named index, add `explicit = true` to its `[[tool.uv.index]]` entry
+in `pyproject.toml`, so unrelated dependencies continue to come from PyPI.
+Run `uv sync` to update the lockfile and environment. These index choices are
+for Linux and Windows; on Apple Silicon, use the default PyPI build.
+
+Check GPU availability with:
+
+```bash
+uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+```
+
+Use `TrainingConfig(device="cuda")` in Python or
+`uv run metis train training.device=cuda` with Hydra. Installing PyTorch does
+not install or update the NVIDIA driver.

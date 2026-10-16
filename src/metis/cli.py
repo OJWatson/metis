@@ -12,7 +12,7 @@ def run_demo(output, steps=100):
 
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    data = load_example()
+    data = load_example(small=True)
     split = data.split(validation_fraction=.2, test_fraction=.2, seed=42)
     surrogate = Surrogate("mlp").fit(
         split.train, validation=split.validation,

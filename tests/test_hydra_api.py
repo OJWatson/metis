@@ -53,6 +53,7 @@ def test_packaged_model_groups_instantiate_the_public_api(family):
 
     config = configured(f"model={family}")
     assert config.dataset._target_ == "metis.load_example"
+    assert config.dataset.small is False
     assert config.split.validation_fraction == config.split.test_fraction == 0.2
     assert config.evaluation.partition == "test"
     assert not config.wandb.enabled and not config.plot.enabled
@@ -86,6 +87,7 @@ def test_installed_hydra_training_produces_reloadable_model(tmp_path):
     output = tmp_path / "experiment"
     command(
         tmp_path,
+        "dataset.small=true",
         "training.steps=2",
         "training.batch_size=4",
         "training.eval_every=1",
@@ -101,7 +103,7 @@ def test_installed_hydra_training_produces_reloadable_model(tmp_path):
     ):
         assert (output / filename).exists()
     surrogate = Surrogate.load(output / "model.pt")
-    data = load_example()
+    data = load_example(small=True)
     prediction = surrogate.predict(data.inputs[:2])
     assert prediction.shape == data.outputs[:2].shape
     assert np.isfinite(prediction).all()
@@ -118,6 +120,7 @@ def test_hydra_multirun_saves_independent_experiment_artifacts(tmp_path):
     result = command(
         tmp_path,
         "--multirun",
+        "dataset.small=true",
         "training.steps=1",
         "training.batch_size=4",
         "training.learning_rate=0.001,0.0003",
@@ -163,7 +166,7 @@ def test_parquet_paths_resolve_from_launch_directory_when_hydra_changes_cwd(tmp_
 def test_absent_evaluation_partition_is_an_error_not_a_training_fallback(tmp_path):
     from metis.hydra_app import run
 
-    config = configured("split.test_fraction=0", "training.steps=1")
+    config = configured("dataset.small=true", "split.test_fraction=0", "training.steps=1")
     with pytest.raises(ValueError, match="No test partition exists"):
         run(config, output_dir=tmp_path)
     assert not (tmp_path / "model.pt").exists()
@@ -177,6 +180,7 @@ def test_real_offline_wandb_training_needs_no_credentials(tmp_path, monkeypatch)
     output = tmp_path / "offline_tracking"
     command(
         tmp_path,
+        "dataset.small=true",
         "training.steps=2",
         "training.eval_every=1",
         "training.batch_size=4",
